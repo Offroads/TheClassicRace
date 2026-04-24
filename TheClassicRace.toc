@@ -1,4 +1,4 @@
-## Interface: 11302
+## Interface: 50503
 ## Title: TheClassicRace
 ## Author: Rubensayshi
 ## Version: @project-version@

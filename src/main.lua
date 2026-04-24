@@ -49,9 +49,7 @@ function TheClassicRace:OnInitialize()
     self.updater = TheClassicRace.Updater(self.Core, self.EventBus)
     self.StatusFrame = TheClassicRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
 
-    -- init a global scanner and a class specific scanner
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
-    self.classScanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus, self.Core:MyClass())
 
     self.EventBus:RegisterCallback(self.Config.Events.NetworkReady, self, function()
         self.Sync:InitSync()
@@ -74,9 +72,7 @@ function TheClassicRace:OnEnable()
 
     self.Network:Init()
 
-    -- init the scanner ticker, first scan will happen when the ticker ticks
     self.scanner:InitTicker()
-    self.classScanner:InitTicker(20)
 
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()

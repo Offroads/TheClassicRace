@@ -27,11 +27,11 @@ local TheClassicRaceConfig = {
     Trace = false,
     LibWhoDebug = false,
     --@debug@
-    Debug = true,
-    Trace = true,
+    Debug = false,
+    Trace = false,
     --@end-debug@
 
-    MaxLevel = 60,
+    MaxLevel = 90,
     MaxLeaderboardSize = 50,
 
     -- OfferSync throttle time window
@@ -55,6 +55,25 @@ local TheClassicRaceConfig = {
         "MONK",
         "DRUID",
         "DEMONHUNTER",
+    },
+
+    -- Class indexes valid in MoP Classic (DemonHunter = 12 doesn't exist)
+    MopClassIndexes = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11},
+
+    -- English class names used in /who query filters (c-ClassName)
+    WhoClassFilter = {
+        WARRIOR     = "Warrior",
+        PALADIN     = "Paladin",
+        HUNTER      = "Hunter",
+        ROGUE       = "Rogue",
+        PRIEST      = "Priest",
+        DEATHKNIGHT = "Death Knight",
+        SHAMAN      = "Shaman",
+        MAGE        = "Mage",
+        WARLOCK     = "Warlock",
+        MONK        = "Monk",
+        DRUID       = "Druid",
+        DEMONHUNTER = nil,
     },
 
     -- ClassIndexes is inverse of Classes

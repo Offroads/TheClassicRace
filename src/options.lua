@@ -79,14 +79,14 @@ function TheClassicRace:RegisterOptions()
 
                     hrClassLb = {
                         order = 20,
-                        name = myClassColored .. " Leaderboard",
+                        name = "Class Leaderboards",
                         width = "full",
                         type = "header",
                     },
                     enableNotificationsClassLb = {
                         order = 21,
                         name = "Enable Notifications",
-                        desc = "Enables / disables the notifications in your chat window for " .. myClassColored .. " leaderboard",
+                        desc = "Enables / disables class leaderboard notifications for all classes",
                         descStyle = "inline",
                         width = "full",
                         type = "toggle",
@@ -95,7 +95,7 @@ function TheClassicRace:RegisterOptions()
                     },
                     notificationThresholdClassLb = {
                         order = 22,
-                        name = "Minimum rank for notifications for " .. myClassColored,
+                        name = "Minimum rank for class notifications",
                         descStyle = "inline",
                         width = "full",
                         type = "range",
@@ -108,7 +108,7 @@ function TheClassicRace:RegisterOptions()
                     },
                     notificationThresholdDescClassLb = {
                         order = 23,
-                        name = "Threshold to limit showing level up notifications for " .. myClassColored ..  " leaderboard",
+                        name = "Threshold for class rank notifications (applies to all classes)",
                         descStyle = "inline",
                         width = "full",
                         type = "description",
@@ -180,5 +180,6 @@ function TheClassicRace:MinimapIconClick(button)
         AceConfigDialog:Open(TheClassicRace.Config.AceConfig)
     else
         self.StatusFrame:Show()
+        self.scanner:TriggerScan()
     end
 end

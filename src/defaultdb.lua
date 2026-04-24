@@ -12,7 +12,7 @@ local TheClassicRaceDefaultDB = {
             globalNotifications = true,
             globalNotificationThreshold = 25,
             classNotifications = true,
-            classNotificationThreshold = 10,
+            classNotificationThreshold = 50,
         },
         gui = {
             display = true,

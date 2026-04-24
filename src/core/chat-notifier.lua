@@ -48,34 +48,28 @@ end
 
 
 function TheClassicRaceChatNotifier:ShouldReport(playerInfo, globalRank, classRank)
-    -- any old dings except rank 1 we ignore
+    -- ignore old dings unless rank 1
     if playerInfo.dingedAt < self.Core:Now() - 600
             and (globalRank == nil or globalRank > 1)
             and (classRank == nil or classRank > 1) then
         return false
     end
 
-    if playerInfo.classIndex ~= self.Core:MyClass() then
-        if not self.DB.profile.options.globalNotifications then
-            return false
-        end
-
-        -- no notifications for globalRanks below threshold of other classes
-        if globalRank == nil or globalRank > self.DB.profile.options.globalNotificationThreshold then
-            return false
-        end
-    else
-        if not self.DB.profile.options.classNotifications then
-            return false
-        end
-
-        -- no notifications for class ranks below threshold
-        if classRank == nil or classRank > self.DB.profile.options.classNotificationThreshold then
-            return false
+    -- class leaderboard notification (applies to ALL classes, not just own)
+    if self.DB.profile.options.classNotifications then
+        if classRank ~= nil and classRank <= self.DB.profile.options.classNotificationThreshold then
+            return true
         end
     end
 
-    return true
+    -- global leaderboard notification
+    if self.DB.profile.options.globalNotifications then
+        if globalRank ~= nil and globalRank <= self.DB.profile.options.globalNotificationThreshold then
+            return true
+        end
+    end
+
+    return false
 end
 
 function TheClassicRaceChatNotifier:OnSelfDing(playerInfo, globalRank, classRank)

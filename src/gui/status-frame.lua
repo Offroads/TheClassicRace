@@ -123,7 +123,6 @@ function TheClassicRaceStatusFrame.FixResizeStatusUpdates(frame)
 end
 
 function TheClassicRaceStatusFrame:RenderTabicons()
-    -- close currently open frame
     if self.tabicons then
         self.tabicons:Release()
     end
@@ -132,44 +131,49 @@ function TheClassicRaceStatusFrame:RenderTabicons()
     tabicons.frame:SetFrameStrata("LOW")
     tabicons:SetLayout("Flow")
     tabicons:SetWidth(20)
-    tabicons:SetHeight(120)
     tabicons:SetFullWidth(false)
     tabicons.frame:Show()
 
-    -- global
-    local globalIcon = AceGUI:Create("Icon")
-    globalIcon:SetCallback("OnClick", function()
-        self.classIndex = 0
-        self:Refresh()
-    end)
-    globalIcon:SetLabel(nil)
-    globalIcon:SetImage("Interface\\PaperDollInfoFrame\\SpellSchoolIcon7")
-    globalIcon:SetImageSize(20, 20)
-    globalIcon:SetWidth(20)
-    globalIcon:SetHeight(20)
-    if self.classIndex ~= 0 then
-        globalIcon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
-    end
-    tabicons:AddChild(globalIcon)
+    local iconCount = 0
 
-    -- own class
-    local coords = CLASS_ICON_TCOORDS[self.myClass]
-    local classIcon = AceGUI:Create("Icon")
-    classIcon:SetCallback("OnClick", function()
-        self.classIndex = self.myClassIndex
-        self:Refresh()
-    end)
-    classIcon:SetLabel(nil)
-    classIcon:SetImage("Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES", unpack(coords))
-    classIcon:SetImageSize(20, 20)
-    classIcon:SetWidth(20)
-    classIcon:SetHeight(20)
-    if self.classIndex ~= self.myClassIndex then
-        classIcon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
+    local function addIcon(image, coords, classIndex)
+        local icon = AceGUI:Create("Icon")
+        icon:SetCallback("OnClick", function()
+            self.classIndex = classIndex
+            self:Refresh()
+        end)
+        icon:SetLabel(nil)
+        if coords then
+            icon:SetImage(image, unpack(coords))
+        else
+            icon:SetImage(image)
+        end
+        icon:SetImageSize(20, 20)
+        icon:SetWidth(20)
+        icon:SetHeight(20)
+        if self.classIndex ~= classIndex then
+            icon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
+        end
+        tabicons:AddChild(icon)
+        iconCount = iconCount + 1
     end
-    tabicons:AddChild(classIcon)
 
-    -- attach to the edge of the main frame
+    -- Global tab (always shown)
+    addIcon("Interface\\PaperDollInfoFrame\\SpellSchoolIcon7", nil, 0)
+
+    -- One tab per class that has at least one discovered player
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
+        local classLb = self.DB.factionrealm.leaderboard[classIndex]
+        if classLb and #classLb.players > 0 then
+            local className = self.Config.Classes[classIndex]
+            local coords    = CLASS_ICON_TCOORDS[className]
+            if coords then
+                addIcon("Interface\\GLUES\\CHARACTERCREATE\\UI-CHARACTERCREATE-CLASSES", coords, classIndex)
+            end
+        end
+    end
+
+    tabicons:SetHeight(iconCount * 22)
     tabicons:ClearAllPoints()
     tabicons.frame:SetPoint("TOPLEFT", self.frame.frame, "TOPRIGHT")
     tabicons.frame:Show()
