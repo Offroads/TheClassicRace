@@ -90,6 +90,9 @@ end
 function TheClassicRace:ResetDB()
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
+    if self.Tracker then
+        self.Tracker:ReinitLeaderboards()
+    end
 end
 
 --[[

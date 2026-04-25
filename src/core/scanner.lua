@@ -118,7 +118,7 @@ function TheClassicRaceScanner:OnWhoListUpdate()
         table.sort(batch, function(a, b) return a.level > b.level end)
     end
 
-    self.EventBus:PublishEvent(TheClassicRace.Config.Events.SlashWhoResult, batch, self.classIndex)
+    self.EventBus:PublishEvent(TheClassicRace.Config.Events.SlashWhoResult, batch, self.lastScanClassIndex)
 end
 
 -- TriggerScan sends a /who query for the next class leaderboard that isn't full.
@@ -138,9 +138,17 @@ function TheClassicRaceScanner:TriggerScan()
     local numClasses = #validIdx
     local query      = nil
 
+    -- On first scan (no data yet), do a broad top-range query to seed all leaderboards at once.
+    local globalLb = self.DB.factionrealm.leaderboard[0]
+    if not globalLb or #globalLb.players == 0 then
+        self.lastScanClassIndex = nil
+        local scanMin = math.max(maxLevel - 10, 1)
+        query = tostring(scanMin) .. "-" .. tostring(maxLevel)
+    end
+
     -- Cycle through classes that still need work.
     -- A class is done only when its leaderboard is full AND the lowest player is already at max level.
-    for i = 0, numClasses - 1 do
+    if not query then for i = 0, numClasses - 1 do
         local slot       = ((self.nextScanClassIdx - 1 + i) % numClasses) + 1
         local classIndex = validIdx[slot]
         local classLb    = self.DB.factionrealm.leaderboard[classIndex]
@@ -176,12 +184,19 @@ function TheClassicRaceScanner:TriggerScan()
             query = tostring(scanMin) .. "-" .. tostring(scanMax) .. " c-" .. filter
             break
         end
-    end
+    end end -- end class scan loop + if not query guard
 
     -- All class leaderboards done: scan by global top range
     if not query then
         self.lastScanClassIndex = nil
-        local lb      = self.DB.factionrealm.leaderboard[0]
+        local lb = self.DB.factionrealm.leaderboard[0]
+
+        -- Global leaderboard is also full with everyone at max level — race is over.
+        if #lb.players >= maxSize and lb.minLevel >= maxLevel then
+            self.EventBus:PublishEvent(TheClassicRace.Config.Events.ScanFinished, true)
+            return
+        end
+
         local scanMin = math.max(lb.minLevel, lb.highestLevel)
         if scanMin <= 1 then scanMin = maxLevel - 10 end
         if scanMin >= maxLevel then scanMin = maxLevel - 1 end
