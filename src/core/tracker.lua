@@ -139,6 +139,8 @@ function TheClassicRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, shouldBro
             self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
                     { serializedBatch, isRebroadcast, classIndex }, "GROUP")
         end
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
+                { serializedBatch, isRebroadcast, classIndex }, "YELL")
     end
 end
 

@@ -12,6 +12,22 @@ local AceComm = LibStub:GetLibrary("AceComm-3.0")
 local LibCompress = LibStub:GetLibrary("LibCompress")
 local EncodeTable = LibCompress:GetAddonEncodeTable()
 
+local function debugLogPayload(event, payload)
+    if event == TheClassicRace.Config.Network.Events.PlayerInfoBatch then
+        local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
+        local players = TheClassicRace.Serializer.DeserializePlayerInfoBatch(batchstr)
+        TheClassicRace:DebugPrint("  rebroadcast=" .. tostring(isRebroadcast) ..
+                " class=" .. tostring(classIndex or 0) .. " count=" .. #players)
+        for _, p in ipairs(players) do
+            TheClassicRace:DebugPrint("  " .. p.name .. " lvl" .. p.level .. " [" .. tostring(p.classIndex) .. "]")
+        end
+    elseif type(payload) == "table" then
+        TheClassicRace:DebugPrintTable(payload)
+    else
+        TheClassicRace:DebugPrint("  payload: " .. tostring(payload))
+    end
+end
+
 --[[
 TheClassicRaceNetwork uses AceComm to send and receive messages over Addon channels
 and broadcast them as events once received fully over our EventBus.
@@ -118,6 +134,8 @@ function TheClassicRaceNetwork:HandleAddonMessage(...)
     local event, payload = object[1], object[2]
 
     TheClassicRace:TracePrint("Received Network Event: " .. event .. " From: " .. sender)
+    TheClassicRace:DebugPrint("Recv " .. event .. " <- " .. sender)
+    debugLogPayload(event, payload)
 
     self.EventBus:PublishEvent(event, payload, sender)
 end
@@ -143,6 +161,8 @@ function TheClassicRaceNetwork:SendObject(event, object, channel, target, prio)
 
     TheClassicRace:TracePrint("Send Network Event: " .. event .. " Channel: " .. channel ..
             " Size: " .. string.len(encoded) .. " / " .. string.len(payload))
+    TheClassicRace:DebugPrint("Send " .. event .. " -> " .. channel)
+    debugLogPayload(event, object)
 
     if channel == "GROUP" then
         if IsInRaid() then
