@@ -1,5 +1,6 @@
 ## Interface: 50503
 ## Interface-Vanilla: 11503
+## Interface-TBC: 20504
 ## Interface-Mists: 50503
 ## Title: TheClassicRace
 ## Author: Rubensayshi
