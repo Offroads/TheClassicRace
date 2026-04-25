@@ -2,7 +2,7 @@
 local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
-local IsInGuild = _G.IsInGuild
+local IsInGuild, GetNumGroupMembers = _G.IsInGuild, _G.GetNumGroupMembers
 
 --[[
 Tracker is responsible for maintaining our leaderboard data based on data provided by other parts of the system
@@ -134,6 +134,10 @@ function TheClassicRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, shouldBro
         if IsInGuild() then
             self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
                     { serializedBatch, isRebroadcast, classIndex }, "GUILD")
+        end
+        if GetNumGroupMembers() > 0 then
+            self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
+                    { serializedBatch, isRebroadcast, classIndex }, "GROUP")
         end
     end
 end

@@ -3,6 +3,7 @@ local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
 local CreateFrame, GetChannelList, GetNumDisplayChannels = _G.CreateFrame, _G.GetChannelList, _G.GetNumDisplayChannels
+local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
 
 -- Libs
 local LibStub = _G.LibStub
@@ -126,8 +127,9 @@ function TheClassicRaceNetwork:SendObject(event, object, channel, target, prio)
     if channel == "CHANNEL" and target == nil then
         target = TheClassicRace.Config.Network.Channel.Id
     end
-    -- no channel, no broadcast
+    -- no channel ID found, skip silently
     if channel == "CHANNEL" and target == nil then
+        TheClassicRace:DebugPrint("SendObject: custom channel not found, skipping CHANNEL send")
         return
     end
     -- no priority, BULK
@@ -141,6 +143,15 @@ function TheClassicRaceNetwork:SendObject(event, object, channel, target, prio)
 
     TheClassicRace:TracePrint("Send Network Event: " .. event .. " Channel: " .. channel ..
             " Size: " .. string.len(encoded) .. " / " .. string.len(payload))
+
+    if channel == "GROUP" then
+        if IsInRaid() then
+            AceComm:SendCommMessage(TheClassicRace.Config.Network.Prefix, encoded, "RAID", nil, prio)
+        elseif GetNumGroupMembers() > 0 then
+            AceComm:SendCommMessage(TheClassicRace.Config.Network.Prefix, encoded, "PARTY", nil, prio)
+        end
+        return
+    end
 
     AceComm:SendCommMessage(
             TheClassicRace.Config.Network.Prefix,
