@@ -28,7 +28,9 @@ setmetatable(TheClassicRaceScanner, {
     end,
 })
 
-local SCAN_COOLDOWN = 60  -- seconds between automatic scans
+local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
+local WHO_RESULT_CAP = 49  -- WoW caps /who results at this count
+local LEVEL_STEP     = 10  -- levels to shift the scan floor up/down
 
 function TheClassicRaceScanner.new(Core, DB, EventBus)
     local self = setmetatable({}, TheClassicRaceScanner)
@@ -38,6 +40,9 @@ function TheClassicRaceScanner.new(Core, DB, EventBus)
     self.EventBus = EventBus
     self.lastScanTime = 0
     self.nextScanClassIdx = 1  -- cycles through MopClassIndexes
+    self.lastScanClassIndex = nil
+    self.classScanFloor = {}   -- per-class adaptive floor level
+    self.lastResultFull = {}   -- per-class: did last scan hit WHO_RESULT_CAP?
 
     self.whoFrame = CreateFrame("Frame")
     self.whoFrame:RegisterEvent("WHO_LIST_UPDATE")
@@ -76,6 +81,10 @@ function TheClassicRaceScanner:OnWhoListUpdate()
     numShown = numShown or total
     if not numShown or numShown == 0 then return end
 
+    if self.lastScanClassIndex then
+        self.lastResultFull[self.lastScanClassIndex] = (numShown >= WHO_RESULT_CAP)
+    end
+
     local batch = {}
     for i = 1, numShown do
         local name, level, filename
@@ -109,7 +118,7 @@ function TheClassicRaceScanner:OnWhoListUpdate()
         table.sort(batch, function(a, b) return a.level > b.level end)
     end
 
-    self.EventBus:PublishEvent(TheClassicRace.Config.Events.SlashWhoResult, batch, self.classIndex)
+    self.EventBus:PublishEvent(TheClassicRace.Config.Events.SlashWhoResult, batch, self.lastScanClassIndex)
 end
 
 -- TriggerScan sends a /who query for the next class leaderboard that isn't full.
@@ -129,35 +138,65 @@ function TheClassicRaceScanner:TriggerScan()
     local numClasses = #validIdx
     local query      = nil
 
-    -- Cycle through classes, find the next one that still needs filling
-    for i = 0, numClasses - 1 do
+    -- On first scan (no data yet), do a broad top-range query to seed all leaderboards at once.
+    local globalLb = self.DB.factionrealm.leaderboard[0]
+    if not globalLb or #globalLb.players == 0 then
+        self.lastScanClassIndex = nil
+        local scanMin = math.max(maxLevel - 10, 1)
+        query = tostring(scanMin) .. "-" .. tostring(maxLevel)
+    end
+
+    -- Cycle through classes that still need work.
+    -- A class is done only when its leaderboard is full AND the lowest player is already at max level.
+    if not query then for i = 0, numClasses - 1 do
         local slot       = ((self.nextScanClassIdx - 1 + i) % numClasses) + 1
         local classIndex = validIdx[slot]
         local classLb    = self.DB.factionrealm.leaderboard[classIndex]
         local className  = TheClassicRace.Config.Classes[classIndex]
         local filter     = TheClassicRace.Config.WhoClassFilter[className]
+        local isDone     = classLb and #classLb.players >= maxSize and classLb.minLevel >= maxLevel
 
-        if filter and classLb and #classLb.players < maxSize then
+        if filter and classLb and not isDone then
             self.nextScanClassIdx = (slot % numClasses) + 1
+            self.lastScanClassIndex = classIndex
 
-            local numPlayers = #classLb.players
-            local scanMin
-            if numPlayers > 0 then
-                -- scan from lowest known player's level upward
-                scanMin = classLb.players[numPlayers].level
-                if scanMin >= maxLevel then scanMin = maxLevel - 1 end
+            local scanMin, scanMax
+            scanMax = maxLevel
+
+            if #classLb.players < maxSize then
+                -- Adapt the floor based on whether the last scan for this class hit the cap.
+                -- Hit cap → raise floor (zoom in on highest players).
+                -- Under cap → lower floor (widen search to catch missed players).
+                local floor = self.classScanFloor[classIndex] or (maxLevel - 20)
+                if self.lastResultFull[classIndex] then
+                    floor = math.min(floor + LEVEL_STEP, maxLevel - 1)
+                else
+                    floor = math.max(floor - LEVEL_STEP, 2)
+                end
+                self.classScanFloor[classIndex] = floor
+                scanMin = floor
             else
-                scanMin = maxLevel - 20
+                -- Leaderboard full but players still leveling: floor at the lowest known level.
+                scanMin = classLb.minLevel
+                if scanMin >= maxLevel then scanMin = maxLevel - 1 end
             end
 
-            query = tostring(scanMin) .. "-" .. tostring(maxLevel) .. " c-" .. filter
+            query = tostring(scanMin) .. "-" .. tostring(scanMax) .. " c-" .. filter
             break
         end
-    end
+    end end -- end class scan loop + if not query guard
 
-    -- All class leaderboards full: scan by global top range
+    -- All class leaderboards done: scan by global top range
     if not query then
-        local lb      = self.DB.factionrealm.leaderboard[0]
+        self.lastScanClassIndex = nil
+        local lb = self.DB.factionrealm.leaderboard[0]
+
+        -- Global leaderboard is also full with everyone at max level — race is over.
+        if #lb.players >= maxSize and lb.minLevel >= maxLevel then
+            self.EventBus:PublishEvent(TheClassicRace.Config.Events.ScanFinished, true)
+            return
+        end
+
         local scanMin = math.max(lb.minLevel, lb.highestLevel)
         if scanMin <= 1 then scanMin = maxLevel - 10 end
         if scanMin >= maxLevel then scanMin = maxLevel - 1 end
