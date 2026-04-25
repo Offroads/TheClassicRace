@@ -9,10 +9,9 @@ local TheClassicRaceDefaultDB = {
             },
             networking = true,
             dontbump = false,
-            globalNotifications = true,
-            globalNotificationThreshold = 25,
-            classNotifications = true,
-            classNotificationThreshold = 50,
+            maxLevelNotify = true,
+            classTopN = 3,
+            globalTopN = 5,
         },
         gui = {
             display = true,

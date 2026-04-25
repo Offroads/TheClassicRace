@@ -55,18 +55,16 @@ function TheClassicRaceChatNotifier:ShouldReport(playerInfo, globalRank, classRa
         return false
     end
 
-    -- class leaderboard notification (applies to ALL classes, not just own)
-    if self.DB.profile.options.classNotifications then
-        if classRank ~= nil and classRank <= self.DB.profile.options.classNotificationThreshold then
-            return true
-        end
+    if self.DB.profile.options.maxLevelNotify and playerInfo.level >= self.Config.MaxLevel then
+        return true
     end
 
-    -- global leaderboard notification
-    if self.DB.profile.options.globalNotifications then
-        if globalRank ~= nil and globalRank <= self.DB.profile.options.globalNotificationThreshold then
-            return true
-        end
+    if classRank ~= nil and classRank <= self.DB.profile.options.classTopN then
+        return true
+    end
+
+    if globalRank ~= nil and globalRank <= self.DB.profile.options.globalTopN then
+        return true
     end
 
     return false
