@@ -108,6 +108,16 @@ local TheClassicRaceConfig = {
         DEMONHUNTER = "Poo",
     },
 
+    ExpansionData = {
+        CLASSIC = { maxLevel = 60,  validClassIndexes = {1,3,4,5,7,8,9,11}, hordeOnly = {7}, allianceOnly = {2} },
+        TBC     = { maxLevel = 70,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
+        WRATH   = { maxLevel = 80,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
+        CATA    = { maxLevel = 85,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
+        MOP     = { maxLevel = 90,  validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11} },
+        WOD     = { maxLevel = 100, validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11} },
+        LEGION  = { maxLevel = 110, validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11,12} },
+    },
+
     Network = {
         Prefix = "TCRace",
         Channel = {
@@ -137,3 +147,22 @@ local TheClassicRaceConfig = {
     },
 }
 TheClassicRace.Config = TheClassicRaceConfig
+
+function TheClassicRaceConfig:DetectExpansion()
+    local _, _, _, tocVersion = GetBuildInfo()
+    if tocVersion < 20000 then
+        return "CLASSIC"
+    elseif tocVersion < 30000 then
+        return "TBC"
+    elseif tocVersion < 40000 then
+        return "WRATH"
+    elseif tocVersion < 50000 then
+        return "CATA"
+    elseif tocVersion < 60000 then
+        return "MOP"
+    elseif tocVersion < 70000 then
+        return "WOD"
+    else
+        return "LEGION"
+    end
+end
