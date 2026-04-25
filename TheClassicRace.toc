@@ -1,8 +1,10 @@
 ## Interface: 50503
+## Interface-Vanilla: 11503
+## Interface-Mists: 50503
 ## Title: TheClassicRace
 ## Author: Rubensayshi
 ## Version: @project-version@
-## Notes: Keep track of the top 50 players in the race to lvl60.
+## Notes: Keep track of the top 50 players in the race to max level.
 ## DefaultState: Enabled
 ## LoadOnDemand: 0
 ## SavedVariables: TheClassicRace_DB

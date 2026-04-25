@@ -109,7 +109,7 @@ local TheClassicRaceConfig = {
     },
 
     ExpansionData = {
-        CLASSIC = { maxLevel = 60,  validClassIndexes = {1,3,4,5,7,8,9,11}, hordeOnly = {7}, allianceOnly = {2} },
+        CLASSIC = { maxLevel = 60,  validClassIndexes = {1,2,3,4,5,7,8,9,11}, hordeOnly = {7}, allianceOnly = {2} },
         TBC     = { maxLevel = 70,  validClassIndexes = {1,2,3,4,5,7,8,9,11} },
         WRATH   = { maxLevel = 80,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
         CATA    = { maxLevel = 85,  validClassIndexes = {1,2,3,4,5,6,7,8,9,11} },
