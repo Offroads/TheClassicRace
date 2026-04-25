@@ -34,11 +34,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.EventBus = EventBus
     self.Network = Network
 
-    self.lbGlobal = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[0])
-    self.lbPerClass = {}
-    for classIndex, _ in ipairs(self.Config.Classes) do
-        self.lbPerClass[classIndex] = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
-    end
+    self:ReinitLeaderboards()
 
     -- subscribe to network events
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerInfoBatch, self, self.OnNetPlayerInfoBatch)
@@ -48,6 +44,14 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Events.ScanFinished, self, self.OnScanFinished)
 
     return self
+end
+
+function TheClassicRaceTracker:ReinitLeaderboards()
+    self.lbGlobal = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[0])
+    self.lbPerClass = {}
+    for classIndex, _ in ipairs(self.Config.Classes) do
+        self.lbPerClass[classIndex] = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
+    end
 end
 
 function TheClassicRaceTracker:OnScanFinished(endofrace)
