@@ -35,8 +35,6 @@ function TheClassicRace:OnInitialize()
     self:ApplyExpansionConfig()
     self.DB = LibStub("AceDB-3.0"):New("TheClassicRace_DB", TheClassicRace.DefaultDB, true)
 
-    self:DBMigrations()
-
     -- determine who we are
     local player, realm = UnitFullName("player")
 
@@ -51,6 +49,8 @@ function TheClassicRace:OnInitialize()
     self.StatusFrame = TheClassicRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
 
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
+
+    self:DBMigrations()
 
     self.EventBus:RegisterCallback(self.Config.Events.NetworkReady, self, function()
         self.Sync:InitSync()
@@ -74,6 +74,7 @@ function TheClassicRace:OnEnable()
     self.Network:Init()
 
     self.scanner:InitTicker()
+    self.Tracker:InitDiscoveryTicker()
 
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()

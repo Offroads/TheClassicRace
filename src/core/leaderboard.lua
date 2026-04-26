@@ -17,6 +17,18 @@ setmetatable(TheClassicRaceLeaderboard, {
     end,
 })
 
+-- djb2 hash over all player entries in sorted order
+function TheClassicRaceLeaderboard.ComputeHash(lbdb)
+    local hash = 5381
+    for _, player in ipairs(lbdb.players) do
+        local entry = player.name .. player.level .. (player.classIndex or 0) .. math.floor(player.dingedAt or 0)
+        for i = 1, #entry do
+            hash = ((hash * 33) + string.byte(entry, i)) % 2147483647
+        end
+    end
+    return hash
+end
+
 function TheClassicRaceLeaderboard.new(Config, leaderboardDB)
     local self = setmetatable({}, TheClassicRaceLeaderboard)
 
@@ -44,8 +56,16 @@ function TheClassicRaceLeaderboard:ProcessPlayerInfo(playerInfo)
     local previousRank = nil
     for rank, player in ipairs(self.lbdb.players) do
         -- find the place where to insert the new player
-        if insertAtRank == nil and playerInfo.level > player.level then
-            insertAtRank = rank
+        -- sort by level desc, then by dingedAt asc (earlier ding = higher rank)
+        if insertAtRank == nil then
+            if playerInfo.level > player.level then
+                insertAtRank = rank
+            elseif playerInfo.level == player.level
+                    and playerInfo.dingedAt ~= nil
+                    and player.dingedAt ~= nil
+                    and playerInfo.dingedAt < player.dingedAt then
+                insertAtRank = rank
+            end
         end
 
         -- find a possibly previous entry of this player
@@ -56,9 +76,13 @@ function TheClassicRaceLeaderboard:ProcessPlayerInfo(playerInfo)
 
     local isNew = previousRank == nil
     local isDing = not isNew and playerInfo.level > self.lbdb.players[previousRank].level
+    local isDingedAtUpdate = not isNew and not isDing
+            and playerInfo.dingedAt ~= nil
+            and self.lbdb.players[previousRank].dingedAt ~= nil
+            and playerInfo.dingedAt < self.lbdb.players[previousRank].dingedAt
 
     -- no change
-    if not isNew and not isDing then
+    if not isNew and not isDing and not isDingedAtUpdate then
         return
     end
 

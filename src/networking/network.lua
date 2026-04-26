@@ -2,7 +2,6 @@
 local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
-local CreateFrame, GetChannelList, GetNumDisplayChannels = _G.CreateFrame, _G.GetChannelList, _G.GetNumDisplayChannels
 local IsInRaid, GetNumGroupMembers = _G.IsInRaid, _G.GetNumGroupMembers
 
 -- Libs
@@ -52,21 +51,6 @@ function TheClassicRaceNetwork.new(Core, EventBus)
 
     self.Core = Core
     self.EventBus = EventBus
-    self.MessageBuffer = {}
-    self.ready = false
-
-    -- create a Frame to use as thread to recieve events on
-    self.Thread = CreateFrame("Frame")
-    self.Thread:Hide()
-    self.Thread:SetScript("OnEvent", function(_, event)
-        TheClassicRace:DebugPrint(event)
-        if (event == "CHANNEL_UI_UPDATE") then
-            self:InitChannel()
-        end
-    end)
-
-    -- register for CHANNEL_UI_UPDATE so we know when our channel might have changed
-    self.Thread:RegisterEvent("CHANNEL_UI_UPDATE")
 
     AceComm:RegisterComm(TheClassicRace.Config.Network.Prefix, function(...)
         self:HandleAddonMessage(...)
@@ -76,34 +60,10 @@ function TheClassicRaceNetwork.new(Core, EventBus)
 end
 
 function TheClassicRaceNetwork:Init()
-    -- init channel if we're not too early (otherwise we'll wait for CHANNEL_UI_UPDATE)
-    if GetNumDisplayChannels() > 0 then
-        self:InitChannel()
-    end
-end
-
-function TheClassicRaceNetwork:InitChannel()
-    local channelId = nil
-    local channels = { GetChannelList() }
-    local i = 2
-    while i < #channels do
-        if (channels[i] == TheClassicRace.Config.Network.Channel.Name) then
-            channelId = channels[i - 1]
-            break
-        end
-        i = i + 3
-    end
-
-    TheClassicRace.Config.Network.Channel.Id = channelId
-
-    if not self.ready then
-        self.ready = true
-        self.EventBus:PublishEvent(TheClassicRace.Config.Events.NetworkReady)
-    end
+    self.EventBus:PublishEvent(TheClassicRace.Config.Events.NetworkReady)
 end
 
 function TheClassicRaceNetwork:HandleAddonMessage(...)
-    -- sender is always full name (name-realm)
     local prefix, message, _, sender = ...
 
     -- check if it's our prefix
@@ -111,46 +71,50 @@ function TheClassicRaceNetwork:HandleAddonMessage(...)
         return
     end
 
-    -- completely ignore anything from other realms
-    local _, senderRealm = self.Core:SplitFullPlayer(sender)
-    if not self.Core:IsMyRealm(senderRealm) then
-        return
+    TheClassicRace:DebugPrint("Recv raw <- " .. tostring(sender))
+
+    local ok, err = pcall(function()
+        -- YELL gives "Name", GUILD/WHISPER give "Name-Realm" — split before comparing
+        local senderName, senderRealm = self.Core:SplitFullPlayer(sender)
+
+        -- completely ignore anything from other realms
+        if not self.Core:IsMyRealm(senderRealm) then
+            return
+        end
+
+        -- ignore our own messages regardless of whether realm is included in sender
+        if senderName == self.Core:RealMe() then
+            return
+        end
+
+        local decoded = EncodeTable:Decode(message)
+        local decompressed, decomprErr = LibCompress:Decompress(decoded)
+        if not decompressed then
+            TheClassicRace:DebugPrint("Decompress error: " .. tostring(decomprErr))
+            return
+        end
+
+        local ok2, object = Serializer:Deserialize(decompressed)
+        if not ok2 then
+            TheClassicRace:DebugPrint("Deserialize error: " .. tostring(object))
+            return
+        end
+
+        local event, payload = object[1], object[2]
+
+        TheClassicRace:TracePrint("Received Network Event: " .. event .. " From: " .. sender)
+        TheClassicRace:DebugPrint("Recv " .. event .. " <- " .. sender)
+        debugLogPayload(event, payload)
+
+        self.EventBus:PublishEvent(event, payload, sender)
+    end)
+
+    if not ok then
+        TheClassicRace:PPrint("Network receive error: " .. tostring(err))
     end
-
-    -- so we can pretend to be somebody else
-    if sender == self.Core:RealMe() then
-        sender = self.Core:Me()
-    end
-
-    -- ignore our own messages
-    if sender == self.Core:RealMe() then
-        return
-    end
-
-    local decoded = EncodeTable:Decode(message)
-    local decompressed, _ = LibCompress:Decompress(decoded)
-
-    local _, object = Serializer:Deserialize(decompressed)
-    local event, payload = object[1], object[2]
-
-    TheClassicRace:TracePrint("Received Network Event: " .. event .. " From: " .. sender)
-    TheClassicRace:DebugPrint("Recv " .. event .. " <- " .. sender)
-    debugLogPayload(event, payload)
-
-    self.EventBus:PublishEvent(event, payload, sender)
 end
 
 function TheClassicRaceNetwork:SendObject(event, object, channel, target, prio)
-    -- default to using the configured channel ID
-    if channel == "CHANNEL" and target == nil then
-        target = TheClassicRace.Config.Network.Channel.Id
-    end
-    -- no channel ID found, skip silently
-    if channel == "CHANNEL" and target == nil then
-        TheClassicRace:DebugPrint("SendObject: custom channel not found, skipping CHANNEL send")
-        return
-    end
-    -- no priority, BULK
     if prio == nil then
         prio = "BULK"
     end

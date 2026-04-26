@@ -55,10 +55,15 @@ function TheClassicRaceSync:InitSync()
         return
     end
 
-    -- request a sync
-    self.Network:SendObject(self.Config.Network.Events.RequestSync, self.classIndex, "CHANNEL")
+    -- include our leaderboard hashes so partners can skip offering when already in sync
+    local globalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
+    local classHash = TheClassicRace.Leaderboard.ComputeHash(
+            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+    local payload = {self.classIndex, globalHash, classHash}
+
+    self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "YELL")
     if IsInGuild() then
-        self.Network:SendObject(self.Config.Network.Events.RequestSync, self.classIndex, "GUILD")
+        self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "GUILD")
     end
 
     -- after 5s we attempt to sync with somebody who offered
@@ -66,7 +71,7 @@ function TheClassicRaceSync:InitSync()
     C_Timer.After(self.Config.RequestSyncWait, function() _self:DoSync() end)
 end
 
-function TheClassicRaceSync:OnNetRequestSync(_, sender)
+function TheClassicRaceSync:OnNetRequestSync(payload, sender)
     -- don't respond to requests when we've disabled networking
     if not self.DB.profile.options.networking then
         return
@@ -78,15 +83,40 @@ function TheClassicRaceSync:OnNetRequestSync(_, sender)
         return
     end
 
-    -- offer to the requester to sync with him
-    self.Network:SendObject(self.Config.Network.Events.OfferSync, { self.classIndex, self.lastSync }, "WHISPER", sender)
+    -- extract requester's classIndex and hashes (payload is a table in new clients, plain number in old)
+    local requesterClassIndex, requesterGlobalHash, requesterClassHash
+    if type(payload) == "table" then
+        requesterClassIndex, requesterGlobalHash, requesterClassHash = payload[1], payload[2], payload[3]
+    else
+        requesterClassIndex = payload
+    end
+
+    -- compute our hashes to include in offer and to decide whether to offer at all
+    local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
+    local myClassHash = TheClassicRace.Leaderboard.ComputeHash(
+            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+
+    -- skip offering if the requester already has identical data to us
+    if requesterGlobalHash ~= nil and requesterGlobalHash == myGlobalHash then
+        local classSyncNeeded = requesterClassIndex == self.classIndex
+                and requesterClassHash ~= nil
+                and requesterClassHash ~= myClassHash
+        if not classSyncNeeded then
+            TheClassicRace:DebugPrint("Skipping offer to " .. sender .. " (already in sync)")
+            return
+        end
+    end
+
+    self.Network:SendObject(self.Config.Network.Events.OfferSync,
+            { self.classIndex, self.lastSync, myGlobalHash, myClassHash }, "WHISPER", sender)
 end
 
 function TheClassicRaceSync:OnNetOfferSync(offer, sender)
-    local classIndex, lastSync = offer[1], offer[2]
+    local classIndex, lastSync, globalHash, classHash = offer[1], offer[2], offer[3], offer[4]
     TheClassicRace:DebugPrint("OnNetOfferSync(" .. sender .. ")")
     -- add anyone who offers to sync with us
-    table.insert(self.offers, {name = sender, classIndex = classIndex, lastSync = lastSync})
+    table.insert(self.offers, {name = sender, classIndex = classIndex, lastSync = lastSync,
+                               globalHash = globalHash, classHash = classHash})
 end
 
 function TheClassicRaceSync:SelectPartner()
@@ -150,8 +180,25 @@ function TheClassicRaceSync:DoSync()
 
     TheClassicRace:DebugPrint("DoSync(" .. self.syncPartner.name .. ")")
 
-    -- request the actual start of the sync
-    self.Network:SendObject(self.Config.Network.Events.StartSync, self.classIndex, "WHISPER", self.syncPartner.name)
+    -- compute our hashes to send and to decide what actually needs syncing
+    local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
+    local sameClass = self.syncPartner.classIndex == self.classIndex
+    local myClassHash = sameClass and TheClassicRace.Leaderboard.ComputeHash(
+            self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+
+    local globalMatch = self.syncPartner.globalHash ~= nil and self.syncPartner.globalHash == myGlobalHash
+    local classMatch = not sameClass
+            or (self.syncPartner.classHash ~= nil and self.syncPartner.classHash == myClassHash)
+
+    if globalMatch and classMatch then
+        TheClassicRace:DebugPrint("Already in sync with " .. self.syncPartner.name)
+        self.isReady = true
+        return
+    end
+
+    -- include our hashes so the partner can also skip sending back leaderboards we already agree on
+    self.Network:SendObject(self.Config.Network.Events.StartSync,
+            {self.classIndex, myGlobalHash, myClassHash}, "WHISPER", self.syncPartner.name)
 
     -- check if we need to retry syncing after a short timeout
     local _self = self
@@ -161,11 +208,11 @@ function TheClassicRaceSync:DoSync()
         end
     end)
 
-    -- sync our data to our sync partner, he can then broadcast anything note worthy to the rest
-    -- sync our global leaderboard
-    self:Sync(self.syncPartner.name, 0)
-    -- sync our class leaderboard if our sync partner is of the same class
-    if self.syncPartner.classIndex == self.classIndex then
+    -- only send leaderboards that the partner doesn't already have
+    if not globalMatch then
+        self:Sync(self.syncPartner.name, 0)
+    end
+    if sameClass and not classMatch then
         self:Sync(self.syncPartner.name, self.classIndex)
     end
 end
@@ -176,18 +223,32 @@ function TheClassicRaceSync:Sync(syncTo, classIndex)
     self.Network:SendObject(self.Config.Network.Events.SyncPayload, batchstr, "WHISPER", syncTo)
 end
 
-function TheClassicRaceSync:OnNetStartSync(_, sender, classIndex)
+function TheClassicRaceSync:OnNetStartSync(payload, sender)
     TheClassicRace:DebugPrint("OnNetStartSync(" .. sender .. ")")
+
+    -- extract requester's classIndex and hashes (new format: table, old format: plain classIndex)
+    local requesterClassIndex, requesterGlobalHash, requesterClassHash
+    if type(payload) == "table" then
+        requesterClassIndex, requesterGlobalHash, requesterClassHash = payload[1], payload[2], payload[3]
+    else
+        requesterClassIndex = payload
+    end
 
     -- mark last sync
     self.lastSync = self.Core:Now()
 
-    -- sync data to requester
-    -- sync our global leaderboard
-    self:Sync(sender, 0)
-    -- sync our class leaderboard if our sync partner is of the same class
-    if classIndex == self.classIndex then
-        self:Sync(sender, self.classIndex)
+    -- only send leaderboards that the requester doesn't already have
+    local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
+    if requesterGlobalHash == nil or requesterGlobalHash ~= myGlobalHash then
+        self:Sync(sender, 0)
+    end
+
+    if requesterClassIndex == self.classIndex then
+        local myClassHash = TheClassicRace.Leaderboard.ComputeHash(
+                self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+        if requesterClassHash == nil or requesterClassHash ~= myClassHash then
+            self:Sync(sender, self.classIndex)
+        end
     end
 end
 

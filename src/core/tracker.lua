@@ -3,6 +3,7 @@ local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
 local IsInGuild, GetNumGroupMembers = _G.IsInGuild, _G.GetNumGroupMembers
+local C_Timer = _G.C_Timer
 
 --[[
 Tracker is responsible for maintaining our leaderboard data based on data provided by other parts of the system
@@ -34,10 +35,15 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.EventBus = EventBus
     self.Network = Network
 
+    self.pendingRequesters = nil   -- non-nil only during active discovery window
+    self.lastGuildBroadcastHash = nil
+
     self:ReinitLeaderboards()
 
     -- subscribe to network events
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerInfoBatch, self, self.OnNetPlayerInfoBatch)
+    EventBus:RegisterCallback(self.Config.Network.Events.DataAvailable, self, self.OnNetDataAvailable)
+    EventBus:RegisterCallback(self.Config.Network.Events.DataRequest, self, self.OnNetDataRequest)
     -- subscribe to local events
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
@@ -128,24 +134,157 @@ function TheClassicRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, shouldBro
             table.insert(batch, playerInfo)
         end
     end
+end
 
-    -- broadcast
-    if shouldBroadcast and #batch > 0 and self.DB.profile.options.networking then
-        local serializedBatch = TheClassicRace.Serializer.SerializePlayerInfoBatch(batch)
-
-        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                { serializedBatch, isRebroadcast, classIndex }, "CHANNEL")
-        if IsInGuild() then
-            self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                    { serializedBatch, isRebroadcast, classIndex }, "GUILD")
+-- djb2 chain over all leaderboards in fixed order (global=0, class 1-12).
+-- Any difference in any leaderboard produces a different hash.
+function TheClassicRaceTracker:ComputeFullHash()
+    local hash = 5381
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb then
+            hash = ((hash * 33) + TheClassicRace.Leaderboard.ComputeHash(lb)) % 2147483647
         end
-        if GetNumGroupMembers() > 0 then
-            self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                    { serializedBatch, isRebroadcast, classIndex }, "GROUP")
-        end
-        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch,
-                { serializedBatch, isRebroadcast, classIndex }, "YELL")
     end
+    return hash
+end
+
+function TheClassicRaceTracker:InitDiscoveryTicker()
+    local jitter = math.random(0, self.Config.BroadcastInterval - 1)
+    C_Timer.After(jitter, function()
+        self:SendDiscoveryBeacon()
+        C_Timer.NewTicker(self.Config.BroadcastInterval, function()
+            self:SendDiscoveryBeacon()
+        end)
+    end)
+end
+
+-- Collect global + class-unique players into batches ready for sending.
+-- Returns nil if the global leaderboard is empty.
+function TheClassicRaceTracker:CollectBatches()
+    local globalPlayers = self.DB.factionrealm.leaderboard[0].players
+    if #globalPlayers == 0 then return nil end
+
+    local inGlobal = {}
+    for _, p in ipairs(globalPlayers) do inGlobal[p.name] = true end
+
+    local batches = { { players = globalPlayers, classIndex = 0 } }
+    for classIndex, _ in ipairs(self.Config.Classes) do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            local unique = {}
+            for _, p in ipairs(lb.players) do
+                if not inGlobal[p.name] then unique[#unique + 1] = p end
+            end
+            if #unique > 0 then
+                batches[#batches + 1] = { players = unique, classIndex = classIndex }
+            end
+        end
+    end
+    return batches
+end
+
+-- Send collected batches to a channel.
+-- YELL: chunked with delays to stay under single-message size.
+-- WHISPER/GUILD/GROUP: full batches in one message each.
+function TheClassicRaceTracker:SendBatches(batches, channel, target)
+    if channel == "YELL" then
+        local chunkSize = self.Config.YellChunkSize
+        local delay = 0
+        for _, batchInfo in ipairs(batches) do
+            local batchPlayers = batchInfo.players
+            local classIdx = batchInfo.classIndex
+            for i = 0, math.ceil(#batchPlayers / chunkSize) - 1 do
+                local chunk = {}
+                for j = i * chunkSize + 1, math.min((i + 1) * chunkSize, #batchPlayers) do
+                    chunk[#chunk + 1] = batchPlayers[j]
+                end
+                C_Timer.After(delay, function()
+                    local batch = TheClassicRace.Serializer.SerializePlayerInfoBatch(chunk)
+                    self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, { batch, false, classIdx }, "YELL")
+                end)
+                delay = delay + self.Config.YellChunkDelay
+            end
+        end
+    else
+        for _, batchInfo in ipairs(batches) do
+            local batch = TheClassicRace.Serializer.SerializePlayerInfoBatch(batchInfo.players)
+            self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, { batch, false, batchInfo.classIndex }, channel, target)
+        end
+    end
+end
+
+-- Every BroadcastInterval seconds: announce our hash to YELL and open a
+-- 5-second window for others to request our data. GUILD/GROUP still get a
+-- full push when the hash has changed (cross-zone reliability).
+function TheClassicRaceTracker:SendDiscoveryBeacon()
+    if self.DB.factionrealm.finished then return end
+    if not self.DB.profile.options.networking then return end
+    if #self.DB.factionrealm.leaderboard[0].players == 0 then return end
+
+    local fullHash = self:ComputeFullHash()
+
+    -- open discovery window then announce hash to YELL
+    self.pendingRequesters = {}
+    self.Network:SendObject(self.Config.Network.Events.DataAvailable, fullHash, "YELL")
+
+    local _self = self
+    C_Timer.After(self.Config.RequestSyncWait, function()
+        _self:ProcessDiscoveryResponses()
+    end)
+
+    -- GUILD/GROUP: push full data only when something actually changed
+    if fullHash ~= self.lastGuildBroadcastHash then
+        local batches = self:CollectBatches()
+        if batches then
+            if IsInGuild() then self:SendBatches(batches, "GUILD") end
+            if GetNumGroupMembers() > 0 then self:SendBatches(batches, "GROUP") end
+            self.lastGuildBroadcastHash = fullHash
+        end
+    end
+end
+
+-- Called after the discovery window closes. Whispers data to a single
+-- requester, or yells to the zone if multiple players need it.
+function TheClassicRaceTracker:ProcessDiscoveryResponses()
+    local requesters = self.pendingRequesters
+    self.pendingRequesters = nil
+
+    if not requesters or #requesters == 0 then
+        TheClassicRace:DebugPrint("Discovery: no one needs data")
+        return
+    end
+
+    local batches = self:CollectBatches()
+    if not batches then return end
+
+    TheClassicRace:DebugPrint("Discovery: " .. #requesters .. " requester(s)")
+    if #requesters == 1 then
+        self:SendBatches(batches, "WHISPER", requesters[1])
+    else
+        self:SendBatches(batches, "YELL")
+    end
+end
+
+-- Received when another player announces their leaderboard hash.
+-- If ours differs, whisper back a data request.
+function TheClassicRaceTracker:OnNetDataAvailable(hash, sender)
+    local myHash = self:ComputeFullHash()
+    if myHash == hash then return end
+
+    TheClassicRace:DebugPrint("DataAvail from " .. sender .. ": hash differs, requesting")
+    self.Network:SendObject(self.Config.Network.Events.DataRequest, 0, "WHISPER", sender)
+end
+
+-- Received when someone wants our data. Only accepted during the active
+-- discovery window opened by SendDiscoveryBeacon.
+function TheClassicRaceTracker:OnNetDataRequest(_, sender)
+    if self.pendingRequesters == nil then return end
+    for _, name in ipairs(self.pendingRequesters) do
+        if name == sender then return end
+    end
+    TheClassicRace:DebugPrint("DataRequest from " .. sender)
+    table.insert(self.pendingRequesters, sender)
 end
 
 --[[

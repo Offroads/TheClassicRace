@@ -27,7 +27,7 @@ local TheClassicRaceConfig = {
     Trace = false,
     LibWhoDebug = false,
     --@debug@
-    Debug = false,
+    Debug = true,
     Trace = false,
     --@end-debug@
 
@@ -118,18 +118,20 @@ local TheClassicRaceConfig = {
         LEGION  = { maxLevel = 110, validClassIndexes = {1,2,3,4,5,6,7,8,9,10,11,12} },
     },
 
+    BroadcastInterval = 60,
+    YellChunkSize = 10,
+    YellChunkDelay = 2,
+
     Network = {
         Prefix = "TCRace",
-        Channel = {
-            Name = "world",
-            Id = nil, -- will be set at runtime to channel ID if joined
-        },
         Events = {
             PlayerInfoBatch = "PINFOB",
             RequestSync = "REQSYNC",
             OfferSync = "OFFERSYNC",
             StartSync = "STARTSYNC",
             SyncPayload = "SYNC",
+            DataAvailable = "DATAAVAIL",
+            DataRequest = "DATAREQ",
         },
     },
     Events = {
