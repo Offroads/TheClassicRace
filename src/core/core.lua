@@ -20,6 +20,7 @@ function TheClassicRaceCore.new(Config, player, realm)
     local self = setmetatable({}, TheClassicRaceCore)
 
     self.Config = Config
+    self.loginTime = GetServerTime()
 
     self.InitMe(self, player, realm)
 
@@ -101,4 +102,8 @@ end
 
 function TheClassicRaceCore:Now()
     return GetServerTime()
+end
+
+function TheClassicRaceCore:LoginTime()
+    return self.loginTime
 end

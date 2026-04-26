@@ -122,6 +122,9 @@ local TheClassicRaceConfig = {
     YellChunkSize = 10,
     YellChunkDelay = 2,
 
+    GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
+    GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
+
     Network = {
         Prefix = "TCRace",
         Events = {
@@ -132,6 +135,8 @@ local TheClassicRaceConfig = {
             SyncPayload = "SYNC",
             DataAvailable = "DATAAVAIL",
             DataRequest = "DATAREQ",
+            GuildSync = "GUILDSYNC",
+            GuildOffer = "GUILDOFFR",
         },
     },
     Events = {

@@ -4,6 +4,18 @@ local TheClassicRace = _G.TheClassicRace
 -- WoW API
 local C_Timer, IsInGuild = _G.C_Timer, _G.IsInGuild
 
+-- djb2 chain over all leaderboards — mirrors Tracker:ComputeFullHash without a cross-component dependency
+local function computeFullHash(db, config)
+    local hash = 5381
+    for classIndex = 0, #config.Classes do
+        local lb = db.factionrealm.leaderboard[classIndex]
+        if lb then
+            hash = ((hash * 33) + TheClassicRace.Leaderboard.ComputeHash(lb)) % 2147483647
+        end
+    end
+    return hash
+end
+
 --[[
 TheClassicRaceSync handles both requesting a sync when we login and responding to others who are request a sync
 ]]--
@@ -36,11 +48,14 @@ function TheClassicRaceSync.new(Config, Core, DB, EventBus, Network)
     self.offers = {}
     self.syncPartner = nil
     self.lastSync = nil
+    self.guildOffers = nil  -- non-nil only during active guild sync window
 
     EventBus:RegisterCallback(self.Config.Network.Events.RequestSync, self, self.OnNetRequestSync)
     EventBus:RegisterCallback(self.Config.Network.Events.OfferSync, self, self.OnNetOfferSync)
     EventBus:RegisterCallback(self.Config.Network.Events.StartSync, self, self.OnNetStartSync)
     EventBus:RegisterCallback(self.Config.Network.Events.SyncPayload, self, self.OnNetSyncPayload)
+    EventBus:RegisterCallback(self.Config.Network.Events.GuildSync, self, self.OnNetGuildSync)
+    EventBus:RegisterCallback(self.Config.Network.Events.GuildOffer, self, self.OnNetGuildOffer)
 
     return self
 end
@@ -62,13 +77,13 @@ function TheClassicRaceSync:InitSync()
     local payload = {self.classIndex, globalHash, classHash}
 
     self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "YELL")
-    if IsInGuild() then
-        self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "GUILD")
-    end
 
-    -- after 5s we attempt to sync with somebody who offered
+    -- after 5s we attempt to sync with somebody who offered via YELL
     local _self = self
     C_Timer.After(self.Config.RequestSyncWait, function() _self:DoSync() end)
+
+    -- guild sync: announce to GUILD and pick the longest-uptime partner after GuildSyncWait+1s
+    self:SendGuildSync()
 end
 
 function TheClassicRaceSync:OnNetRequestSync(payload, sender)
@@ -225,19 +240,34 @@ end
 
 function TheClassicRaceSync:OnNetStartSync(payload, sender)
     TheClassicRace:DebugPrint("OnNetStartSync(" .. sender .. ")")
+    self.lastSync = self.Core:Now()
 
-    -- extract requester's classIndex and hashes (new format: table, old format: plain classIndex)
     local requesterClassIndex, requesterGlobalHash, requesterClassHash
     if type(payload) == "table" then
-        requesterClassIndex, requesterGlobalHash, requesterClassHash = payload[1], payload[2], payload[3]
+        requesterClassIndex = payload[1]
+
+        if type(payload[2]) == "table" then
+            -- guild sync: payload[2] is per-class hashes — send every leaderboard that differs
+            local perClassHashes = payload[2]
+            for classIndex = 0, #self.Config.Classes do
+                local lb = self.DB.factionrealm.leaderboard[classIndex]
+                if lb and #lb.players > 0 then
+                    local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
+                    if myHash ~= (perClassHashes[classIndex + 1] or 0) then
+                        self:Sync(sender, classIndex)
+                    end
+                end
+            end
+            return
+        end
+
+        -- zone sync: payload[2] is globalHash, payload[3] is classHash
+        requesterGlobalHash, requesterClassHash = payload[2], payload[3]
     else
         requesterClassIndex = payload
     end
 
-    -- mark last sync
-    self.lastSync = self.Core:Now()
-
-    -- only send leaderboards that the requester doesn't already have
+    -- only send global + own class (zone sync path)
     local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
     if requesterGlobalHash == nil or requesterGlobalHash ~= myGlobalHash then
         self:Sync(sender, 0)
@@ -255,19 +285,118 @@ end
 function TheClassicRaceSync:OnNetSyncPayload(payload, sender)
     TheClassicRace:DebugPrint("OnNetSyncPayload(" .. sender .. ")")
 
-    -- if we've requested sync data then we shouldn't broadcast what we receive because it should already have been spread
-    -- if we're provided sync data then we should broadcast relevant info
-    local shouldBroadcast = self.isReady
-
     local batch = TheClassicRace.Serializer.DeserializePlayerInfoBatch(payload)
 
-    -- push into our eventbus
-    self.EventBus:PublishEvent(self.Config.Events.SyncResult, batch, shouldBroadcast)
+    self.EventBus:PublishEvent(self.Config.Events.SyncResult, batch)
 
     -- mark ourselves as synced up
     if not self.isReady then
         TheClassicRace:DebugPrint("we're now synced up")
         self.isReady = true
     end
+end
+
+-- Periodic guild sync ticker: re-runs the guild sync flow every GuildSyncInterval seconds.
+-- Only fires once we're ready (initial zone sync complete).
+function TheClassicRaceSync:InitGuildTicker()
+    local _self = self
+    C_Timer.NewTicker(self.Config.GuildSyncInterval, function()
+        if _self.isReady then
+            _self:SendGuildSync()
+        end
+    end)
+end
+
+-- Announce our presence to the guild and open a window for offers.
+-- Used both on login (called from InitSync) and by the periodic ticker.
+function TheClassicRaceSync:SendGuildSync()
+    if not IsInGuild() then return end
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    self.guildOffers = {}
+
+    local fullHash = computeFullHash(self.DB, self.Config)
+    self.Network:SendObject(self.Config.Network.Events.GuildSync,
+            {self.classIndex, fullHash, self.Core:LoginTime()}, "GUILD")
+
+    local _self = self
+    C_Timer.After(self.Config.GuildSyncWait + 1, function()
+        _self:DoGuildSync()
+    end)
+end
+
+-- Received when another guild member announces via GuildSync.
+-- If our data differs, whisper back an offer after a random delay to spread load.
+function TheClassicRaceSync:OnNetGuildSync(payload, sender)
+    if not self.DB.profile.options.networking then return end
+    if not self.isReady then return end
+
+    local _, requesterFullHash, _ = payload[1], payload[2], payload[3]
+
+    local myFullHash = computeFullHash(self.DB, self.Config)
+    if myFullHash == requesterFullHash then return end
+
+    local delay = math.random(0, self.Config.GuildSyncWait)
+    local _self = self
+    C_Timer.After(delay, function()
+        local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(_self.DB.factionrealm.leaderboard[0])
+        local myClassHash = TheClassicRace.Leaderboard.ComputeHash(
+                _self.DB.factionrealm.leaderboard[_self.classIndex] or {players = {}})
+        _self.Network:SendObject(_self.Config.Network.Events.GuildOffer,
+                {_self.classIndex, _self.lastSync, myFullHash, myGlobalHash, myClassHash, _self.Core:LoginTime()},
+                "WHISPER", sender)
+    end)
+end
+
+-- Collect guild offers during the open window.
+function TheClassicRaceSync:OnNetGuildOffer(offer, sender)
+    if self.guildOffers == nil then return end
+    local classIndex, lastSync, fullHash, globalHash, classHash, loginTime =
+            offer[1], offer[2], offer[3], offer[4], offer[5], offer[6]
+    TheClassicRace:DebugPrint("GuildOffer from " .. sender)
+    table.insert(self.guildOffers, {
+        name = sender, classIndex = classIndex, lastSync = lastSync,
+        fullHash = fullHash, globalHash = globalHash, classHash = classHash, loginTime = loginTime,
+    })
+end
+
+-- Called after the guild offer window closes.
+-- Picks the offer with the lowest loginTime (longest uptime = most authoritative)
+-- and requests all missing leaderboards from that partner via STARTSYNC with per-class hashes.
+function TheClassicRaceSync:DoGuildSync()
+    local offers = self.guildOffers
+    self.guildOffers = nil
+
+    if not offers or #offers == 0 then
+        TheClassicRace:DebugPrint("Guild sync: no offers")
+        return
+    end
+
+    -- pick longest-uptime partner (lowest loginTime)
+    local best = offers[1]
+    for _, offer in ipairs(offers) do
+        if offer.loginTime ~= nil and (best.loginTime == nil or offer.loginTime < best.loginTime) then
+            best = offer
+        end
+    end
+
+    TheClassicRace:DebugPrint("DoGuildSync with " .. best.name)
+
+    -- sanity check: if full hashes match now, nothing to do
+    if best.fullHash == computeFullHash(self.DB, self.Config) then
+        TheClassicRace:DebugPrint("Already in sync with guild partner " .. best.name)
+        return
+    end
+
+    -- send per-class hashes so the partner knows exactly which leaderboards to send back
+    local myPerClassHashes = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
+    end
+
+    self.Network:SendObject(self.Config.Network.Events.StartSync,
+            {self.classIndex, myPerClassHashes}, "WHISPER", best.name)
 end
 
