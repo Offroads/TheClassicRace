@@ -79,6 +79,12 @@ function TheClassicRace:OnEnable()
     self.Sync:InitGuildTicker()
     self.Sync:InitBuddyTicker()
 
+    local groupEventFrame = CreateFrame("Frame")
+    groupEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+    groupEventFrame:SetScript("OnEvent", function()
+        self.Sync:OnGroupRosterUpdate()
+    end)
+
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()
     end

@@ -3,6 +3,7 @@ local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
+local GetNumGroupMembers = _G.GetNumGroupMembers
 
 -- djb2 chain over all leaderboards — mirrors Tracker:ComputeFullHash without a cross-component dependency
 local function computeFullHash(db, config)
@@ -478,6 +479,38 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
             end
         end
     end
+end
+
+-- Called when the party roster changes. Debounced to avoid firing multiple times
+-- in quick succession. Sends BPING to GROUP so all members can exchange hashes
+-- and push any missing leaderboards.
+function TheClassicRaceSync:OnGroupRosterUpdate()
+    if not self.isReady then return end
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+    if GetNumGroupMembers() == 0 then return end
+
+    -- debounce: multiple roster events can fire in quick succession
+    if self.groupSyncPending then return end
+    self.groupSyncPending = true
+    local _self = self
+    C_Timer.After(2, function()
+        _self.groupSyncPending = nil
+        _self:SendGroupSync()
+    end)
+end
+
+function TheClassicRaceSync:SendGroupSync()
+    if GetNumGroupMembers() == 0 then return end
+    TheClassicRace:DebugPrint("GroupSync: sending BPING to GROUP")
+
+    local myFullHash = computeFullHash(self.DB, self.Config)
+    local myPerClassHashes = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
+    end
+    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes}, "GROUP")
 end
 
 -- Start the periodic buddy ping ticker.
