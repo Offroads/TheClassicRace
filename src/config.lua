@@ -125,6 +125,9 @@ local TheClassicRaceConfig = {
     GuildSyncInterval = 300,   -- periodic guild sync every 5 minutes
     GuildSyncWait = 10,        -- seconds to collect guild offers before picking a partner
 
+    BuddySyncInterval = 600,   -- buddy ping every 10 minutes
+    BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
+
     Network = {
         Prefix = "TCRace",
         Events = {
@@ -137,6 +140,8 @@ local TheClassicRaceConfig = {
             DataRequest = "DATAREQ",
             GuildSync = "GUILDSYNC",
             GuildOffer = "GUILDOFFR",
+            BuddyPing = "BPING",
+            BuddyPong = "BPONG",
         },
     },
     Events = {

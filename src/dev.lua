@@ -26,6 +26,10 @@ function TheClassicRace:slashtcr(input)
     elseif action == "show" then
         self.StatusFrame:Show()
 
+    --[[DEBUG FRAME]]--
+    elseif action == "debug" then
+        self.DebugFrame:Show()
+
     --[[UPDATE FRAME]]--
     elseif action == "render" then
         self.StatusFrame:Render()
