@@ -178,13 +178,20 @@ function TheClassicRaceSync:SelectPartnerFromList(offers)
     return table.remove(offers, index)
 end
 
+function TheClassicRaceSync:SetReady()
+    if not self.isReady then
+        self.isReady = true
+        self:SendBuddyPings()
+    end
+end
+
 function TheClassicRaceSync:DoSync()
     -- no offers
     if #self.offers == 0 then
         TheClassicRace:DebugPrint("no sync partners")
 
         -- mark ourselves as synced up, otherwise nobody can ever sync
-        self.isReady = true
+        self:SetReady()
         return
     end
 
@@ -210,7 +217,7 @@ function TheClassicRaceSync:DoSync()
 
     if globalMatch and classMatch then
         TheClassicRace:DebugPrint("Already in sync with " .. self.syncPartner.name)
-        self.isReady = true
+        self:SetReady()
         return
     end
 
@@ -295,7 +302,7 @@ function TheClassicRaceSync:OnNetSyncPayload(payload, sender)
     -- mark ourselves as synced up
     if not self.isReady then
         TheClassicRace:DebugPrint("we're now synced up")
-        self.isReady = true
+        self:SetReady()
     end
 end
 
@@ -413,16 +420,50 @@ function TheClassicRaceSync:SendBuddyPings()
 end
 
 -- Received BPING from a buddy: update their last-seen, push leaderboards they're missing, ack with BPONG.
+-- BPONG includes our own hashes so the sender can also push what we're missing (bidirectional in one round trip).
 function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
     if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
 
-    -- always ack so the sender knows we're online
-    self.Network:SendObject(self.Config.Network.Events.BuddyPong, {}, "WHISPER", sender)
+    local myFullHash = computeFullHash(self.DB, self.Config)
+    local myPerClassHashes = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
+    end
+
+    -- always ack with our hashes so the sender knows we're online and can push back
+    self.Network:SendObject(self.Config.Network.Events.BuddyPong,
+            {myFullHash, myPerClassHashes}, "WHISPER", sender)
 
     if not self.isReady then return end
 
     local senderFullHash = payload[1]
+    if myFullHash == senderFullHash then return end
+
+    local senderPerClassHashes = payload[2]
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            local myHash = myPerClassHashes[classIndex + 1]
+            local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
+            if myHash ~= theirHash then
+                self:Sync(sender, classIndex)
+            end
+        end
+    end
+end
+
+-- Received BPONG from a buddy: update their last-seen, push any leaderboards they're missing.
+function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
+    self:AddBuddy(sender)
+    TheClassicRace:DebugPrint("BuddyPong from " .. sender)
+
+    if not self.isReady then return end
+
+    local senderFullHash = payload[1]
+    if not senderFullHash then return end
+
     local myFullHash = computeFullHash(self.DB, self.Config)
     if myFullHash == senderFullHash then return end
 
@@ -437,12 +478,6 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
             end
         end
     end
-end
-
--- Received BPONG from a buddy: update their last-seen.
-function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
-    self:AddBuddy(sender)
-    TheClassicRace:DebugPrint("BuddyPong from " .. sender)
 end
 
 -- Start the periodic buddy ping ticker.

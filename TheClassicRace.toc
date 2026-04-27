@@ -37,3 +37,4 @@ src\core\serializer.lua
 src\core\leaderboard.lua
 src\core\updater.lua
 src\gui\status-frame.lua
+src\gui\debug-frame.lua
