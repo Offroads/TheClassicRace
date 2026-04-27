@@ -47,6 +47,7 @@ function TheClassicRace:OnInitialize()
     self.Sync = TheClassicRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
     self.updater = TheClassicRace.Updater(self.Core, self.EventBus)
     self.StatusFrame = TheClassicRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
+    self.DebugFrame = TheClassicRace.DebugFrame(self.Config, self.Core, self.DB)
 
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
 
@@ -76,6 +77,13 @@ function TheClassicRace:OnEnable()
     self.scanner:InitTicker()
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
+    self.Sync:InitBuddyTicker()
+
+    local groupEventFrame = CreateFrame("Frame")
+    groupEventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
+    groupEventFrame:SetScript("OnEvent", function()
+        self.Sync:OnGroupRosterUpdate()
+    end)
 
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()
@@ -101,7 +109,11 @@ end
 The /tcr handler, toggles the frame, unless overwritten in dev.lua with a more advanced development mode /tcr
 --]]
 function TheClassicRace:slashtcr(input)
-    self.StatusFrame:Show()
+    if input == "debug" then
+        self.DebugFrame:Show()
+    else
+        self.StatusFrame:Show()
+    end
 end
 
 function TheClassicRace:ApplyExpansionConfig()
