@@ -2,7 +2,7 @@
 local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
-local C_Timer, IsInGuild = _G.C_Timer, _G.IsInGuild
+local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
 
 -- djb2 chain over all leaderboards — mirrors Tracker:ComputeFullHash without a cross-component dependency
 local function computeFullHash(db, config)
@@ -56,6 +56,8 @@ function TheClassicRaceSync.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Network.Events.SyncPayload, self, self.OnNetSyncPayload)
     EventBus:RegisterCallback(self.Config.Network.Events.GuildSync, self, self.OnNetGuildSync)
     EventBus:RegisterCallback(self.Config.Network.Events.GuildOffer, self, self.OnNetGuildOffer)
+    EventBus:RegisterCallback(self.Config.Network.Events.BuddyPing, self, self.OnNetBuddyPing)
+    EventBus:RegisterCallback(self.Config.Network.Events.BuddyPong, self, self.OnNetBuddyPong)
 
     return self
 end
@@ -132,6 +134,7 @@ function TheClassicRaceSync:OnNetOfferSync(offer, sender)
     -- add anyone who offers to sync with us
     table.insert(self.offers, {name = sender, classIndex = classIndex, lastSync = lastSync,
                                globalHash = globalHash, classHash = classHash})
+    self:AddBuddy(sender)
 end
 
 function TheClassicRaceSync:SelectPartner()
@@ -359,6 +362,95 @@ function TheClassicRaceSync:OnNetGuildOffer(offer, sender)
         name = sender, classIndex = classIndex, lastSync = lastSync,
         fullHash = fullHash, globalHash = globalHash, classHash = classHash, loginTime = loginTime,
     })
+end
+
+-- Add or update a buddy entry in the persistent DB list.
+function TheClassicRaceSync:AddBuddy(name)
+    if name == self.Core:FullRealMe() then return end
+    local buddies = self.DB.factionrealm.buddies
+    if not buddies[name] then
+        buddies[name] = {}
+    end
+    buddies[name].lastSeen = self.Core:Now()
+    TheClassicRace:DebugPrint("Buddy: added/updated " .. name)
+end
+
+-- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
+function TheClassicRaceSync:SendBuddyPings()
+    if not self.isReady then return end
+    if self.DB.factionrealm.finished then return end
+    if not self.DB.profile.options.networking then return end
+
+    local names = {}
+    for name, _ in pairs(self.DB.factionrealm.buddies) do
+        names[#names + 1] = name
+    end
+    if #names == 0 then return end
+
+    local batchSize = self.Config.BuddyPingBatchSize
+    local selected = names
+    if #names > batchSize then
+        selected = {}
+        for i = 1, batchSize do
+            local j = math.random(i, #names)
+            names[i], names[j] = names[j], names[i]
+            selected[i] = names[i]
+        end
+    end
+
+    local myFullHash = computeFullHash(self.DB, self.Config)
+    local myPerClassHashes = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
+    end
+    local payload = {myFullHash, myPerClassHashes}
+
+    TheClassicRace:DebugPrint("BuddyPing: pinging " .. #selected .. " of " .. #names .. " buddies")
+    for _, name in ipairs(selected) do
+        self.Network:SendObject(self.Config.Network.Events.BuddyPing, payload, "WHISPER", name)
+    end
+end
+
+-- Received BPING from a buddy: update their last-seen, push leaderboards they're missing, ack with BPONG.
+function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
+    if not self.DB.profile.options.networking then return end
+    self:AddBuddy(sender)
+
+    -- always ack so the sender knows we're online
+    self.Network:SendObject(self.Config.Network.Events.BuddyPong, {}, "WHISPER", sender)
+
+    if not self.isReady then return end
+
+    local senderFullHash = payload[1]
+    local myFullHash = computeFullHash(self.DB, self.Config)
+    if myFullHash == senderFullHash then return end
+
+    local senderPerClassHashes = payload[2]
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
+            local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
+            if myHash ~= theirHash then
+                self:Sync(sender, classIndex)
+            end
+        end
+    end
+end
+
+-- Received BPONG from a buddy: update their last-seen.
+function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
+    self:AddBuddy(sender)
+    TheClassicRace:DebugPrint("BuddyPong from " .. sender)
+end
+
+-- Start the periodic buddy ping ticker.
+function TheClassicRaceSync:InitBuddyTicker()
+    local _self = self
+    C_Timer.NewTicker(self.Config.BuddySyncInterval, function()
+        _self:SendBuddyPings()
+    end)
 end
 
 -- Called after the guild offer window closes.

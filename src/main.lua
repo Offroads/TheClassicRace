@@ -76,6 +76,7 @@ function TheClassicRace:OnEnable()
     self.scanner:InitTicker()
     self.Tracker:InitDiscoveryTicker()
     self.Sync:InitGuildTicker()
+    self.Sync:InitBuddyTicker()
 
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()

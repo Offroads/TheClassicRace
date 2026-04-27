@@ -24,6 +24,7 @@ local TheClassicRaceDefaultDB = {
     factionrealm = {
         dbversion = "0.0.0",
         finished = false,
+        buddies = {},
         leaderboard = {
             ['**'] = {
                 minLevel = 2,
