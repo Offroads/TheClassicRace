@@ -258,6 +258,11 @@ function TheClassicRaceStatusFrame:Render()
     scroll:SetFullHeight(true)
     scrolltainer:AddChild(scroll)
 
+    -- Extra bottom clearance so the scrollbar doesn't cover the resize grip (sizer_se ~16 px).
+    scroll.scrollbar:ClearAllPoints()
+    scroll.scrollbar:SetPoint("TOPLEFT", scroll.scrollframe, "TOPRIGHT", 4, -16)
+    scroll.scrollbar:SetPoint("BOTTOMLEFT", scroll.scrollframe, "BOTTOMRIGHT", 4, 32)
+
     for rank, playerInfo in ipairs(self.players) do
         if rank ~= 1 then
             local playerClass = self.Core:ClassByIndex(playerInfo.classIndex)
