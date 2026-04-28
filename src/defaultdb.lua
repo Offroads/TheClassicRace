@@ -32,6 +32,15 @@ local TheClassicRaceDefaultDB = {
                 players = {},
             },
         },
+        -- Pioneers: first player to reach each level
+        -- raceStartedAt: earliest dingedAt ever seen; used as race-start reference for time display
+        raceStartedAt = nil,
+        -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
+        playerHistory = {},
+        -- firstToLevel[classFilter][level] = {name, classIndex, dingedAt}
+        -- classFilter 0 = overall, 1-11 = per class
+        firstToLevel = {},
+        pioneersMigrated = false,
     },
 }
 

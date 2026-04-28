@@ -39,9 +39,13 @@ function TheClassicRaceStatusFrame.new(Config, Core, DB, EventBus)
     EventBus:RegisterCallback(self.Config.Events.RefreshGUI, self, self.OnRefreshGUI)
 
     self.classIndex = 0
+    self.view = "leaderboard"   -- "leaderboard" or "pioneers"
     self.frame = nil
     self.tabicons = nil
+    self.lefticons = nil
     self.contentframe = nil
+
+    self.pioneersView = TheClassicRace.PioneersView(Config, Core, DB)
 
     self:OnRefreshGUI()
 
@@ -60,6 +64,7 @@ function TheClassicRaceStatusFrame:Refresh()
     self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
 
     if self.frame ~= nil and self.contentframe ~= nil then
+        self:RenderLeftIcon()
         self:RenderTabicons()
         self:Render()
     end
@@ -95,12 +100,19 @@ function TheClassicRaceStatusFrame:Show()
             _self.tabicons:Release()
             _self.tabicons = nil
         end
+
+        -- release left icon
+        if _self.lefticons then
+            _self.lefticons:Release()
+            _self.lefticons = nil
+        end
     end)
     TheClassicRaceStatusFrame.FixResizeStatusUpdates(frame)
     frame:DoLayout()
 
     self.frame = frame
 
+    self:RenderLeftIcon()
     self:RenderTabicons()
     self:Render()
 end
@@ -120,6 +132,43 @@ function TheClassicRaceStatusFrame.FixResizeStatusUpdates(frame)
             status.left = frame.frame:GetLeft()
         end)
     end
+end
+
+-- Left-side icon that toggles between the leaderboard and pioneers views.
+function TheClassicRaceStatusFrame:RenderLeftIcon()
+    if self.lefticons then
+        self.lefticons:Release()
+    end
+
+    local lefticons = AceGUI:Create("SimpleGroup")
+    lefticons.frame:SetFrameStrata("LOW")
+    lefticons:SetLayout("Flow")
+    lefticons:SetWidth(20)
+    lefticons:SetFullWidth(false)
+    lefticons.frame:Show()
+
+    local icon = AceGUI:Create("Icon")
+    icon:SetCallback("OnClick", function()
+        self.view = (self.view == "pioneers") and "leaderboard" or "pioneers"
+        self:Refresh()
+    end)
+    icon:SetLabel(nil)
+    icon:SetImage("Interface\\Icons\\Achievement_GuildPerk_FastTrack")
+    icon:SetImageSize(20, 20)
+    icon:SetWidth(20)
+    icon:SetHeight(20)
+    -- dim when leaderboard is active; full brightness when pioneers is active
+    if self.view ~= "pioneers" then
+        icon.image:SetVertexColor(0.8, 0.8, 0.8, 0.8)
+    end
+    lefticons:AddChild(icon)
+
+    lefticons:SetHeight(22)
+    lefticons:ClearAllPoints()
+    lefticons.frame:SetPoint("TOPRIGHT", self.frame.frame, "TOPLEFT")
+    lefticons.frame:Show()
+
+    self.lefticons = lefticons
 end
 
 function TheClassicRaceStatusFrame:RenderTabicons()
@@ -199,6 +248,16 @@ function TheClassicRaceStatusFrame:Render()
     end)
     self.frame:AddChild(frame)
 
+    if self.view == "pioneers" then
+        self.pioneersView:Render(frame, self.classIndex)
+    else
+        self:RenderLeaderboard(frame)
+    end
+
+    self.contentframe = frame
+end
+
+function TheClassicRaceStatusFrame:RenderLeaderboard(frame)
     -- display the leader
     if #self.players > 0 then
         local leader = self.players[1]
@@ -280,6 +339,4 @@ function TheClassicRaceStatusFrame:Render()
 
     -- trigger layout update to fix blank first row
     scroll:DoLayout()
-
-    self.contentframe = frame
 end

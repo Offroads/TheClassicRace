@@ -89,3 +89,81 @@ function TheClassicRaceSerializer.DeserializePlayerInfoBatch(str)
 
     return res
 end
+
+-- Serializes firstToLevel into a compact string.
+-- firstToLevel[classFilter][level] = {name, classIndex, dingedAt}
+-- Record format per entry: CF(2) LV(2) CI(2) name dingedAtDelta $
+function TheClassicRaceSerializer.SerializeFTLBatch(firstToLevel)
+    local entries = {}
+    for classFilter, levels in pairs(firstToLevel) do
+        for level, record in pairs(levels) do
+            if record.dingedAt ~= nil then
+                entries[#entries + 1] = {
+                    classFilter = classFilter,
+                    level = level,
+                    name = record.name,
+                    classIndex = record.classIndex or 0,
+                    dingedAt = record.dingedAt,
+                }
+            end
+        end
+    end
+
+    if #entries == 0 then
+        return ""
+    end
+
+    local offset = entries[1].dingedAt
+    for _, e in ipairs(entries) do
+        if e.dingedAt < offset then offset = e.dingedAt end
+    end
+    offset = math.floor(offset)
+
+    local res = string.sub("0000000000" .. offset, -10) .. "$"
+    for _, e in ipairs(entries) do
+        res = res
+            .. string.format("%02d", e.classFilter)
+            .. string.format("%02d", e.level)
+            .. string.format("%02d", e.classIndex)
+            .. e.name
+            .. (math.floor(e.dingedAt) - offset)
+            .. "$"
+    end
+
+    return res
+end
+
+-- Deserializes a firstToLevel batch string produced by SerializeFTLBatch.
+-- When duplicate (classFilter, level) entries appear, keeps the one with the earlier dingedAt.
+function TheClassicRaceSerializer.DeserializeFTLBatch(str)
+    if str == "" then
+        return {}
+    end
+
+    local offset = tonumber(string.sub(str, 1, 10))
+    str = string.sub(str, 12)
+
+    local ftldb = {}
+    for substr in string.gmatch(str, "([^$]+$)") do
+        -- format: CF(2) LV(2) CI(2) name(non-digit-non-dash) dingedAtDelta
+        local cf, lv, ci, name, delta = string.match(substr, "(%d%d)(%d%d)(%d%d)([^%d-]+)(%-?%d+)")
+        if cf and lv and ci and name and delta then
+            local classFilter = tonumber(cf)
+            local level = tonumber(lv)
+            local classIndex = tonumber(ci)
+            local dingedAt = tonumber(delta) + offset
+
+            if ftldb[classFilter] == nil then ftldb[classFilter] = {} end
+            local existing = ftldb[classFilter][level]
+            if existing == nil or dingedAt < existing.dingedAt then
+                ftldb[classFilter][level] = {
+                    name = name,
+                    classIndex = classIndex,
+                    dingedAt = dingedAt,
+                }
+            end
+        end
+    end
+
+    return ftldb
+end

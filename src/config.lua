@@ -142,12 +142,14 @@ local TheClassicRaceConfig = {
             GuildOffer = "GUILDOFFR",
             BuddyPing = "BPING",
             BuddyPong = "BPONG",
+            FTLSync = "FTLSYNC",
         },
     },
     Events = {
         NetworkReady = "NETWORK_READY",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
+        FTLSyncResult = "FTL_SYNC_RESULT",
         BumpScan = "BUMP_SCAN",
         Ding = "DING",
         -- ScanFinished(endofrace)

@@ -26,6 +26,8 @@ local LibStub = _G.LibStub
 ---       handles syncing when coming online
 ---@field StatusFrame   TheClassicRaceStatusFrame
 ---       GUI element to display the leaderboard
+---@field PioneersView  TheClassicRacePioneersView
+---       renders the Pioneers (first-to-level) tab inside the status frame
 ---@field DefaultDB     TheClassicRaceDefaultDB
 TheClassicRace = LibStub("AceAddon-3.0"):NewAddon("TheClassicRace", "AceConsole-3.0")
 
@@ -94,6 +96,28 @@ function TheClassicRace:DBMigrations()
     -- fresh DB or pre-versioning DB, reset and init ...
     if self.DB.factionrealm.dbversion == "0.0.0" then
         self:ResetDB()
+        return
+    end
+    -- one-time migration: seed pioneer data from existing leaderboard entries
+    if not self.DB.factionrealm.pioneersMigrated then
+        self:MigratePioneerData()
+        self.DB.factionrealm.pioneersMigrated = true
+    end
+end
+
+-- Populates firstToLevel and playerHistory from whatever leaderboard data already exists.
+-- Only runs once per DB (on first load after the pioneers feature is introduced).
+function TheClassicRace:MigratePioneerData()
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            for _, player in ipairs(lb.players) do
+                if player.dingedAt then
+                    self.Tracker:UpdatePioneers(player)
+                    self.Tracker:UpdatePlayerHistory(player)
+                end
+            end
+        end
     end
 end
 

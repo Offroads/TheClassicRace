@@ -45,6 +45,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     -- subscribe to local events
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
+    EventBus:RegisterCallback(self.Config.Events.FTLSyncResult, self, self.OnFTLSyncResult)
     EventBus:RegisterCallback(self.Config.Events.ScanFinished, self, self.OnScanFinished)
 
     return self
@@ -338,6 +339,10 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
+    -- update pioneer records for every detected player
+    self:UpdatePioneers(playerInfo)
+    self:UpdatePlayerHistory(playerInfo)
+
     -- publish internal event
     if globalIsChanged or classIsChanged then
         self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
@@ -350,4 +355,82 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
 
     -- return normalized playerinfo and boolean if anything changed
     return playerInfo, globalIsChanged or classIsChanged
+end
+
+-- Records this player's dingedAt in playerHistory for future per-character level breakdown.
+function TheClassicRaceTracker:UpdatePlayerHistory(playerInfo)
+    local dingedAt = playerInfo.dingedAt
+    if dingedAt == nil then return end
+
+    local db = self.DB.factionrealm
+    local name = playerInfo.name
+    local level = playerInfo.level
+    local classIndex = playerInfo.classIndex
+
+    if db.playerHistory[name] == nil then
+        db.playerHistory[name] = {classIndex = classIndex, levels = {}}
+    end
+
+    local hist = db.playerHistory[name]
+    if hist.classIndex == nil and classIndex ~= nil then
+        hist.classIndex = classIndex
+    end
+    -- only keep the earliest detection at each level
+    if hist.levels[level] == nil or dingedAt < hist.levels[level] then
+        hist.levels[level] = dingedAt
+    end
+end
+
+-- Updates firstToLevel (overall and per-class) and raceStartedAt for every detected player.
+function TheClassicRaceTracker:UpdatePioneers(playerInfo)
+    local dingedAt = playerInfo.dingedAt
+    if dingedAt == nil then return end
+
+    local db = self.DB.factionrealm
+    local name = playerInfo.name
+    local level = playerInfo.level
+    local classIndex = playerInfo.classIndex
+
+    -- track the earliest detection as race start
+    if db.raceStartedAt == nil or dingedAt < db.raceStartedAt then
+        db.raceStartedAt = dingedAt
+    end
+
+    -- overall (classFilter 0)
+    if db.firstToLevel[0] == nil then db.firstToLevel[0] = {} end
+    local ftl0 = db.firstToLevel[0]
+    if ftl0[level] == nil or dingedAt < ftl0[level].dingedAt then
+        ftl0[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
+    end
+
+    -- per-class
+    if classIndex ~= nil and classIndex ~= 0 then
+        if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
+        local ftlC = db.firstToLevel[classIndex]
+        if ftlC[level] == nil or dingedAt < ftlC[level].dingedAt then
+            ftlC[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
+        end
+    end
+end
+
+-- Merges received firstToLevel data from a sync partner, keeping the earliest record per slot.
+function TheClassicRaceTracker:OnFTLSyncResult(ftldb)
+    local db = self.DB.factionrealm
+
+    for classFilter, levels in pairs(ftldb) do
+        if db.firstToLevel[classFilter] == nil then
+            db.firstToLevel[classFilter] = {}
+        end
+        for level, record in pairs(levels) do
+            local existing = db.firstToLevel[classFilter][level]
+            if existing == nil or record.dingedAt < existing.dingedAt then
+                db.firstToLevel[classFilter][level] = record
+                if db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt then
+                    db.raceStartedAt = record.dingedAt
+                end
+            end
+        end
+    end
+
+    self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
 end

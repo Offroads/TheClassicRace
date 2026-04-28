@@ -36,5 +36,6 @@ src\core\sync.lua
 src\core\serializer.lua
 src\core\leaderboard.lua
 src\core\updater.lua
+src\gui\pioneers-frame.lua
 src\gui\status-frame.lua
 src\gui\debug-frame.lua
