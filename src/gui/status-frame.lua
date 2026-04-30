@@ -9,6 +9,7 @@ local AceGUI = LibStub("AceGUI-3.0")
 
 -- WoW API
 local GameFontNormalLarge, CLASS_ICON_TCOORDS = _G.GameFontNormalLarge, _G.CLASS_ICON_TCOORDS
+local C_Timer = _G.C_Timer
 
 -- colors
 local SEYELLOW = TheClassicRace.Colors.SYSTEM_EVENT_YELLOW
@@ -44,6 +45,7 @@ function TheClassicRaceStatusFrame.new(Config, Core, DB, EventBus)
     self.tabicons = nil
     self.lefticons = nil
     self.contentframe = nil
+    self.refreshPending = false
 
     self.pioneersView = TheClassicRace.PioneersView(Config, Core, DB)
 
@@ -52,12 +54,24 @@ function TheClassicRaceStatusFrame.new(Config, Core, DB, EventBus)
     return self
 end
 
+-- Coalesces rapid-fire Ding/RefreshGUI events (e.g. 50-player sync batch) into
+-- a single UI rebuild at the start of the next frame via C_Timer.After(0).
+function TheClassicRaceStatusFrame:ScheduleRefresh()
+    if self.refreshPending then return end
+    self.refreshPending = true
+    local _self = self
+    C_Timer.After(0, function()
+        _self.refreshPending = false
+        _self:Refresh()
+    end)
+end
+
 function TheClassicRaceStatusFrame:OnDing()
-    self:Refresh()
+    self:ScheduleRefresh()
 end
 
 function TheClassicRaceStatusFrame:OnRefreshGUI()
-    self:Refresh()
+    self:ScheduleRefresh()
 end
 
 function TheClassicRaceStatusFrame:Refresh()
