@@ -25,7 +25,7 @@ function TheClassicRace:PPrint(message)
 end
 
 function TheClassicRace:DebugPrint(message)
-    if (self.Config.Debug == true) then
+    if self.Config.Debug or (self.DB and self.DB.profile.options.debug) then
         print("|cFF7777FFTheClassicRace Debug:|cFFFFFFFF", message)
     end
 end
@@ -37,7 +37,7 @@ function TheClassicRace:TracePrint(message)
 end
 
 function TheClassicRace:DebugPrintTable(t)
-    if (self.Config.Debug == true) then
+    if self.Config.Debug or (self.DB and self.DB.profile.options.debug) then
         print("|cFF7777FFTheClassicRace Debug:|cFFFFFFFF table...")
         print(dumpTable(t))
     end

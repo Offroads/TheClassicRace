@@ -40,6 +40,15 @@ function TheClassicRaceDebugFrame.new(Config, Core, DB)
     return self
 end
 
+function TheClassicRaceDebugFrame:Hide()
+    if self.frame then
+        self.frame:Hide()
+        self.frame:Release()
+        self.frame = nil
+        self.scroll = nil
+    end
+end
+
 function TheClassicRaceDebugFrame:Show()
     if self.frame then
         self.frame:Hide()

@@ -90,6 +90,10 @@ function TheClassicRace:OnEnable()
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()
     end
+
+    if self.DB.profile.options.debug then
+        self.DebugFrame:Show()
+    end
 end
 
 function TheClassicRace:DBMigrations()

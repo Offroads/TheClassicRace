@@ -12,6 +12,7 @@ local TheClassicRaceDefaultDB = {
             maxLevelNotify = true,
             classTopN = 3,
             globalTopN = 5,
+            debug = false,
         },
         gui = {
             display = true,
