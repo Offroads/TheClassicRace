@@ -159,6 +159,8 @@ local TheClassicRaceConfig = {
         ScanFinished = "SCAN_FINISHED",
         RaceFinished = "RACE_FINISHED",
         RefreshGUI = "REFRESH_GUI",
+        MsgStats = "MSG_STATS",
+        BuddyUpdate = "BUDDY_UPDATE",
     },
 }
 TheClassicRace.Config = TheClassicRaceConfig

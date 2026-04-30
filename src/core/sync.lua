@@ -421,6 +421,7 @@ function TheClassicRaceSync:AddBuddy(name)
     end
     buddies[name].lastSeen = self.Core:Now()
     TheClassicRace:DebugPrint("Buddy: added/updated " .. name)
+    self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).

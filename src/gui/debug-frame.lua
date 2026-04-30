@@ -10,6 +10,9 @@ local AceGUI = LibStub("AceGUI-3.0")
 -- WoW API
 local GetServerTime, math = _G.GetServerTime, _G.math
 
+local GRAY = "|cff888888"
+local YELLOW = "|cffffff00"
+
 local function formatAge(timestamp)
     if not timestamp then return "never" end
     local diff = GetServerTime() - timestamp
@@ -30,13 +33,23 @@ setmetatable(TheClassicRaceDebugFrame, {
     __call = function(cls, ...) return cls.new(...) end,
 })
 
-function TheClassicRaceDebugFrame.new(Config, Core, DB)
+function TheClassicRaceDebugFrame.new(Config, Core, DB, EventBus)
     local self = setmetatable({}, TheClassicRaceDebugFrame)
     self.Config = Config
     self.Core = Core
     self.DB = DB
+    self.EventBus = EventBus
     self.frame = nil
     self.scroll = nil
+
+    local _self = self
+    EventBus:RegisterCallback(Config.Events.MsgStats, self, function()
+        _self:Render()
+    end)
+    EventBus:RegisterCallback(Config.Events.BuddyUpdate, self, function()
+        _self:Render()
+    end)
+
     return self
 end
 
@@ -60,9 +73,9 @@ function TheClassicRaceDebugFrame:Show()
     local _self = self
 
     local frame = AceGUI:Create("Window")
-    frame:SetTitle("TCR Buddies")
+    frame:SetTitle("TCR Debug")
     frame:SetWidth(320)
-    frame:SetHeight(420)
+    frame:SetHeight(480)
     frame:SetLayout("Flow")
     frame:SetCallback("OnClose", function(widget)
         widget:Release()
@@ -72,7 +85,7 @@ function TheClassicRaceDebugFrame:Show()
     self.frame = frame
 
     local pingBtn = AceGUI:Create("Button")
-    pingBtn:SetText("Ping Now")
+    pingBtn:SetText("Ping Buddies")
     pingBtn:SetWidth(150)
     pingBtn:SetCallback("OnClick", function()
         TheClassicRace.Sync:SendBuddyPings()
@@ -88,6 +101,15 @@ function TheClassicRaceDebugFrame:Show()
         _self:Render()
     end)
     frame:AddChild(clearBtn)
+
+    local resetStatsBtn = AceGUI:Create("Button")
+    resetStatsBtn:SetText("Reset Stats")
+    resetStatsBtn:SetWidth(150)
+    resetStatsBtn:SetCallback("OnClick", function()
+        TheClassicRace.MsgStats = { send = {}, recv = {} }
+        _self:Render()
+    end)
+    frame:AddChild(resetStatsBtn)
 
     local scrolltainer = AceGUI:Create("SimpleGroup")
     scrolltainer:SetLayout("Fill")
@@ -109,6 +131,60 @@ function TheClassicRaceDebugFrame:Render()
     if not self.scroll then return end
     self.scroll:ReleaseChildren()
 
+    self:RenderMsgStats()
+    self:RenderBuddies()
+
+    self.scroll:DoLayout()
+end
+
+function TheClassicRaceDebugFrame:RenderMsgStats()
+    local stats = TheClassicRace.MsgStats
+    if not stats then return end
+
+    local statsHeader = AceGUI:Create("Label")
+    statsHeader:SetFullWidth(true)
+    statsHeader:SetText(YELLOW .. "Messages|r")
+    self.scroll:AddChild(statsHeader)
+
+    -- collect union of all event types seen in send or recv
+    local allEvents = {}
+    local seen = {}
+    for event, _ in pairs(stats.send) do
+        if not seen[event] then seen[event] = true; allEvents[#allEvents + 1] = event end
+    end
+    for event, _ in pairs(stats.recv) do
+        if not seen[event] then seen[event] = true; allEvents[#allEvents + 1] = event end
+    end
+    table.sort(allEvents)
+
+    if #allEvents == 0 then
+        local none = AceGUI:Create("Label")
+        none:SetFullWidth(true)
+        none:SetText(GRAY .. "  no messages yet|r")
+        self.scroll:AddChild(none)
+    else
+        local header = AceGUI:Create("Label")
+        header:SetFullWidth(true)
+        header:SetText(GRAY .. "  type            send  recv|r")
+        self.scroll:AddChild(header)
+
+        for _, event in ipairs(allEvents) do
+            local s = stats.send[event] or 0
+            local r = stats.recv[event] or 0
+            local label = AceGUI:Create("Label")
+            label:SetFullWidth(true)
+            label:SetText(string.format("  %-16s %4d  %4d", event, s, r))
+            self.scroll:AddChild(label)
+        end
+    end
+
+    local spacer = AceGUI:Create("Label")
+    spacer:SetFullWidth(true)
+    spacer:SetText(" ")
+    self.scroll:AddChild(spacer)
+end
+
+function TheClassicRaceDebugFrame:RenderBuddies()
     local buddies = self.DB.factionrealm.buddies
 
     local list = {}
@@ -119,17 +195,15 @@ function TheClassicRaceDebugFrame:Render()
         return (a.lastSeen or 0) > (b.lastSeen or 0)
     end)
 
-    local header = AceGUI:Create("Label")
-    header:SetFullWidth(true)
-    header:SetText("|cffffff00Buddies: " .. #list .. "|r")
-    self.scroll:AddChild(header)
+    local buddyHeader = AceGUI:Create("Label")
+    buddyHeader:SetFullWidth(true)
+    buddyHeader:SetText(YELLOW .. "Buddies: " .. #list .. "|r")
+    self.scroll:AddChild(buddyHeader)
 
     for _, buddy in ipairs(list) do
         local label = AceGUI:Create("Label")
         label:SetFullWidth(true)
-        label:SetText(buddy.name .. "  |cff888888" .. formatAge(buddy.lastSeen) .. "|r")
+        label:SetText(buddy.name .. "  " .. GRAY .. formatAge(buddy.lastSeen) .. "|r")
         self.scroll:AddChild(label)
     end
-
-    self.scroll:DoLayout()
 end

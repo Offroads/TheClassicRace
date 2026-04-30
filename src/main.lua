@@ -49,9 +49,12 @@ function TheClassicRace:OnInitialize()
     self.Sync = TheClassicRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
     self.updater = TheClassicRace.Updater(self.Core, self.EventBus)
     self.StatusFrame = TheClassicRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
-    self.DebugFrame = TheClassicRace.DebugFrame(self.Config, self.Core, self.DB)
+    self.DebugFrame = TheClassicRace.DebugFrame(self.Config, self.Core, self.DB, self.EventBus)
 
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
+
+    -- message stats counters (only populated when debug mode is on)
+    TheClassicRace.MsgStats = { send = {}, recv = {} }
 
     self:DBMigrations()
 
