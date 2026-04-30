@@ -128,6 +128,8 @@ local TheClassicRaceConfig = {
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
 
+    DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
+
     Network = {
         Prefix = "TCRace",
         Events = {

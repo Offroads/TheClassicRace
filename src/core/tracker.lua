@@ -2,7 +2,7 @@
 local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
-local C_Timer = _G.C_Timer
+local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
 
 --[[
 Tracker is responsible for maintaining our leaderboard data based on data provided by other parts of the system
@@ -35,6 +35,8 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.Network = Network
 
     self.pendingRequesters = nil   -- non-nil only during active discovery window
+    self.pendingDings = {}
+    self.dingPushPending = false
 
     self:ReinitLeaderboards()
 
@@ -101,11 +103,78 @@ function TheClassicRaceTracker:OnNetPlayerInfoBatch(payload, _)
 end
 
 function TheClassicRaceTracker:OnSlashWhoResult(playerInfoBatch, classIndex)
-    self:ProcessPlayerInfoBatch(playerInfoBatch, classIndex)
+    local changed = {}
+    for _, playerInfo in ipairs(playerInfoBatch) do
+        local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
+        if isChanged then
+            changed[#changed + 1] = normalizedInfo
+        end
+    end
+    if #changed > 0 then
+        self:ScheduleDingPush(changed)
+    end
 end
 
 function TheClassicRaceTracker:OnSyncResult(playerInfoBatch)
     self:ProcessPlayerInfoBatch(playerInfoBatch)
+end
+
+function TheClassicRaceTracker:ScheduleDingPush(changedPlayers)
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    -- YELL immediately so zone players get real-time updates
+    local batchstr = TheClassicRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
+    self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "YELL")
+
+    -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
+    for _, p in ipairs(changedPlayers) do
+        self.pendingDings[p.name] = p
+    end
+
+    if not self.dingPushPending then
+        self.dingPushPending = true
+        local _self = self
+        C_Timer.After(self.Config.DingPushDelay, function()
+            _self:FlushDingPush()
+        end)
+    end
+end
+
+function TheClassicRaceTracker:FlushDingPush()
+    self.dingPushPending = false
+
+    local players = {}
+    for _, p in pairs(self.pendingDings) do
+        players[#players + 1] = p
+    end
+    self.pendingDings = {}
+
+    if #players == 0 then return end
+
+    local batchstr = TheClassicRace.Serializer.SerializePlayerInfoBatch(players)
+    local payload = {batchstr, false, 0}
+
+    if IsInGuild() then
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "GUILD")
+    end
+
+    -- whisper a random sample of buddies (capped at BuddyPingBatchSize)
+    local names = {}
+    for name, _ in pairs(self.DB.factionrealm.buddies) do
+        names[#names + 1] = name
+    end
+    local batchSize = self.Config.BuddyPingBatchSize
+    if #names > batchSize then
+        for i = 1, batchSize do
+            local j = math.random(i, #names)
+            names[i], names[j] = names[j], names[i]
+        end
+        for i = batchSize + 1, #names do names[i] = nil end
+    end
+    for _, name in ipairs(names) do
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "WHISPER", name)
+    end
 end
 
 function TheClassicRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, classIndex)
