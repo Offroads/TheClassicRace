@@ -25,7 +25,8 @@ function TheClassicRace:PPrint(message)
 end
 
 function TheClassicRace:DebugPrint(message)
-    if self.Config.Debug or (self.DB and self.DB.profile.options.debug) then
+    local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
+    if enabled then
         print("|cFF7777FFTheClassicRace Debug:|cFFFFFFFF", message)
     end
 end
@@ -37,7 +38,8 @@ function TheClassicRace:TracePrint(message)
 end
 
 function TheClassicRace:DebugPrintTable(t)
-    if self.Config.Debug or (self.DB and self.DB.profile.options.debug) then
+    local enabled = self.DB and self.DB.profile.options.debug or (not self.DB and self.Config.Debug)
+    if enabled then
         print("|cFF7777FFTheClassicRace Debug:|cFFFFFFFF table...")
         print(dumpTable(t))
     end
