@@ -100,6 +100,9 @@ function TheClassicRace:DBMigrations()
     -- fresh DB or pre-versioning DB, reset and init ...
     if self.DB.factionrealm.dbversion == "0.0.0" then
         self:ResetDB()
+        -- Record server time as realm-opened reference on first ever login.
+        -- GetServerTime() is server-synced (UTC), not affected by client timezone.
+        self.DB.factionrealm.realmOpenedAt = GetServerTime()
         return
     end
     -- one-time migration: seed pioneer data from existing leaderboard entries
@@ -126,8 +129,13 @@ function TheClassicRace:MigratePioneerData()
 end
 
 function TheClassicRace:ResetDB()
+    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp.
+    local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
+    if realmOpenedAt then
+        self.DB.factionrealm.realmOpenedAt = realmOpenedAt
+    end
     if self.Tracker then
         self.Tracker:ReinitLeaderboards()
     end

@@ -416,8 +416,13 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
 end
 
 -- Merges received firstToLevel data from a sync partner, keeping the earliest record per slot.
-function TheClassicRaceTracker:OnFTLSyncResult(ftldb)
+-- Also merges realmOpenedAt, keeping the earliest (closest to actual realm launch).
+function TheClassicRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
     local db = self.DB.factionrealm
+
+    if remoteRealmOpenedAt and (db.realmOpenedAt == nil or remoteRealmOpenedAt < db.realmOpenedAt) then
+        db.realmOpenedAt = remoteRealmOpenedAt
+    end
 
     for classFilter, levels in pairs(ftldb) do
         if db.firstToLevel[classFilter] == nil then

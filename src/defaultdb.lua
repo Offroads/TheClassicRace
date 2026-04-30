@@ -34,7 +34,9 @@ local TheClassicRaceDefaultDB = {
             },
         },
         -- Pioneers: first player to reach each level
-        -- raceStartedAt: earliest dingedAt ever seen; used as race-start reference for time display
+        -- realmOpenedAt: GetServerTime() recorded on first-ever DB init for this realm; synced to keep earliest
+        realmOpenedAt = nil,
+        -- raceStartedAt: earliest dingedAt ever seen; fallback reference when realmOpenedAt is nil
         raceStartedAt = nil,
         -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
         playerHistory = {},

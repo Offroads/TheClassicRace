@@ -545,16 +545,26 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
 end
 
 -- Whispers our complete firstToLevel dataset to the target player.
+-- Payload is a table {ftlBatchString, realmOpenedAt} so both are synced together.
 function TheClassicRaceSync:SyncFTL(syncTo)
     local ftlstr = TheClassicRace.Serializer.SerializeFTLBatch(self.DB.factionrealm.firstToLevel or {})
-    self.Network:SendObject(self.Config.Network.Events.FTLSync, ftlstr, "WHISPER", syncTo)
+    local payload = {ftlstr, self.DB.factionrealm.realmOpenedAt}
+    self.Network:SendObject(self.Config.Network.Events.FTLSync, payload, "WHISPER", syncTo)
 end
 
 -- Received a firstToLevel sync payload — deserialize and forward to tracker for merging.
+-- Accepts both the new table format {ftlstr, realmOpenedAt} and the old bare-string format.
 function TheClassicRaceSync:OnNetFTLSync(payload, sender)
     TheClassicRace:DebugPrint("OnNetFTLSync(" .. sender .. ")")
-    local ftldb = TheClassicRace.Serializer.DeserializeFTLBatch(payload)
-    self.EventBus:PublishEvent(self.Config.Events.FTLSyncResult, ftldb)
+    local ftlstr, remoteRealmOpenedAt
+    if type(payload) == "table" then
+        ftlstr = payload[1]
+        remoteRealmOpenedAt = payload[2]
+    else
+        ftlstr = payload
+    end
+    local ftldb = TheClassicRace.Serializer.DeserializeFTLBatch(ftlstr or "")
+    self.EventBus:PublishEvent(self.Config.Events.FTLSyncResult, ftldb, remoteRealmOpenedAt)
 end
 
 -- Called when the party roster changes. Debounced to avoid firing multiple times
