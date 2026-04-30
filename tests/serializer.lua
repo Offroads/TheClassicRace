@@ -119,6 +119,16 @@ describe("Serializer", function()
             assert.equals(t,       result[0][5].dingedAt)
         end)
 
+        it("deduplicates on deserialize keeping alphabetically earlier name when dingedAt is equal", function()
+            local t = 1000000000
+            local str = string.sub("0000000000" .. t, -10)
+                    .. "$"
+                    .. "000501Zebra0$"   -- dingedAt = t, name "Zebra"
+                    .. "000502Aardvark0$" -- dingedAt = t, name "Aardvark" (should win)
+            local result = DeserFTLBatch(str)
+            assert.equals("Aardvark", result[0][5].name)
+        end)
+
         it("handles single-digit class indexes correctly", function()
             local t = 1000000000
             local ftl = {

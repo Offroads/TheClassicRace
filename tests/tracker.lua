@@ -243,6 +243,12 @@ describe("Tracker", function()
             assert.equals("Alice", db.factionrealm.firstToLevel[0][15].name)
         end)
 
+        it("UpdatePioneers uses name as tiebreaker when dingedAt is equal", function()
+            tracker:ProcessPlayerInfo(playerInfo("Zebra",    15, WARRIORIDX, time))
+            tracker:ProcessPlayerInfo(playerInfo("Aardvark", 15, DRUIDIDX,   time))
+            assert.equals("Aardvark", db.factionrealm.firstToLevel[0][15].name)
+        end)
+
         it("UpdatePlayerHistory records dingedAt per level", function()
             tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
             local hist = db.factionrealm.playerHistory["Alice"]

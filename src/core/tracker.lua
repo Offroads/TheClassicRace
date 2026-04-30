@@ -399,7 +399,8 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     -- overall (classFilter 0)
     if db.firstToLevel[0] == nil then db.firstToLevel[0] = {} end
     local ftl0 = db.firstToLevel[0]
-    if ftl0[level] == nil or dingedAt < ftl0[level].dingedAt then
+    if ftl0[level] == nil or dingedAt < ftl0[level].dingedAt
+            or (dingedAt == ftl0[level].dingedAt and name < ftl0[level].name) then
         ftl0[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
     end
 
@@ -407,7 +408,8 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     if classIndex ~= nil and classIndex ~= 0 then
         if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
         local ftlC = db.firstToLevel[classIndex]
-        if ftlC[level] == nil or dingedAt < ftlC[level].dingedAt then
+        if ftlC[level] == nil or dingedAt < ftlC[level].dingedAt
+                or (dingedAt == ftlC[level].dingedAt and name < ftlC[level].name) then
             ftlC[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
         end
     end
@@ -423,7 +425,8 @@ function TheClassicRaceTracker:OnFTLSyncResult(ftldb)
         end
         for level, record in pairs(levels) do
             local existing = db.firstToLevel[classFilter][level]
-            if existing == nil or record.dingedAt < existing.dingedAt then
+            if existing == nil or record.dingedAt < existing.dingedAt
+                    or (record.dingedAt == existing.dingedAt and record.name < existing.name) then
                 db.firstToLevel[classFilter][level] = record
                 if db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt then
                     db.raceStartedAt = record.dingedAt

@@ -155,7 +155,8 @@ function TheClassicRaceSerializer.DeserializeFTLBatch(str)
 
             if ftldb[classFilter] == nil then ftldb[classFilter] = {} end
             local existing = ftldb[classFilter][level]
-            if existing == nil or dingedAt < existing.dingedAt then
+            if existing == nil or dingedAt < existing.dingedAt
+                    or (dingedAt == existing.dingedAt and name < existing.name) then
                 ftldb[classFilter][level] = {
                     name = name,
                     classIndex = classIndex,
