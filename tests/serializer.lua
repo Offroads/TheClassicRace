@@ -9,6 +9,8 @@ local SerPInfo = TheClassicRace.Serializer.SerializePlayerInfo
 local DeserPInfo = TheClassicRace.Serializer.DeserializePlayerInfo
 local SerPInfoBatch = TheClassicRace.Serializer.SerializePlayerInfoBatch
 local DeserPInfoBatch = TheClassicRace.Serializer.DeserializePlayerInfoBatch
+local SerFTLBatch = TheClassicRace.Serializer.SerializeFTLBatch
+local DeserFTLBatch = TheClassicRace.Serializer.DeserializeFTLBatch
 
 function mergeConfigs(...)
     local config = {}
@@ -66,6 +68,77 @@ describe("Serializer", function()
                     AceSerializer:Serialize({nub1.name, nub1.level, nub1.dingedAt, nub1.classIndex}))
             assert.same(47,
                     string.len(AceSerializer:Serialize({nub1.name, nub1.level, nub1.dingedAt, nub1.classIndex})))
+        end)
+    end)
+
+    describe("FTLBatch", function()
+        it("empty batch serializes to empty string", function()
+            assert.equals("", SerFTLBatch({}))
+            assert.same({}, DeserFTLBatch(""))
+        end)
+
+        it("round-trips firstToLevel data", function()
+            local t = 1000000000
+            local ftl = {
+                [0] = {
+                    [15] = {name = "Alice", classIndex = 3, dingedAt = t + 100},
+                    [16] = {name = "Bob",   classIndex = 1, dingedAt = t},
+                },
+                [3] = {
+                    [15] = {name = "Alice", classIndex = 3, dingedAt = t + 100},
+                },
+            }
+
+            local str = SerFTLBatch(ftl)
+            local result = DeserFTLBatch(str)
+
+            assert.equals(t + 100, result[0][15].dingedAt)
+            assert.equals("Alice", result[0][15].name)
+            assert.equals(3,       result[0][15].classIndex)
+
+            assert.equals(t,     result[0][16].dingedAt)
+            assert.equals("Bob", result[0][16].name)
+            assert.equals(1,     result[0][16].classIndex)
+
+            assert.equals(t + 100, result[3][15].dingedAt)
+            assert.equals("Alice", result[3][15].name)
+        end)
+
+        it("deduplicates on deserialize keeping earliest dingedAt", function()
+            -- manually craft a string with two entries for (classFilter=0, level=5)
+            local t = 1000000000
+            -- format: offset$ CF(2) LV(2) CI(2) name delta $
+            local str = string.sub("0000000000" .. t, -10)
+                    .. "$"
+                    .. "000501Early0$"        -- dingedAt = t+0  (Earlier)
+                    .. "000502Late1000$"      -- dingedAt = t+1000 (Later)
+            local result = DeserFTLBatch(str)
+            -- Earlier record should win
+            assert.equals("Early", result[0][5].name)
+            assert.equals(1,       result[0][5].classIndex)
+            assert.equals(t,       result[0][5].dingedAt)
+        end)
+
+        it("deduplicates on deserialize keeping alphabetically earlier name when dingedAt is equal", function()
+            local t = 1000000000
+            local str = string.sub("0000000000" .. t, -10)
+                    .. "$"
+                    .. "000501Zebra0$"   -- dingedAt = t, name "Zebra"
+                    .. "000502Aardvark0$" -- dingedAt = t, name "Aardvark" (should win)
+            local result = DeserFTLBatch(str)
+            assert.equals("Aardvark", result[0][5].name)
+        end)
+
+        it("handles single-digit class indexes correctly", function()
+            local t = 1000000000
+            local ftl = {
+                [0] = {[2] = {name = "Nub", classIndex = 1, dingedAt = t}},
+            }
+            local str = SerFTLBatch(ftl)
+            local result = DeserFTLBatch(str)
+            assert.equals("Nub", result[0][2].name)
+            assert.equals(1,     result[0][2].classIndex)
+            assert.equals(t,     result[0][2].dingedAt)
         end)
     end)
 

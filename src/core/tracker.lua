@@ -2,7 +2,7 @@
 local TheClassicRace = _G.TheClassicRace
 
 -- WoW API
-local C_Timer = _G.C_Timer
+local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
 
 --[[
 Tracker is responsible for maintaining our leaderboard data based on data provided by other parts of the system
@@ -35,6 +35,8 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.Network = Network
 
     self.pendingRequesters = nil   -- non-nil only during active discovery window
+    self.pendingDings = {}
+    self.dingPushPending = false
 
     self:ReinitLeaderboards()
 
@@ -45,6 +47,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     -- subscribe to local events
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
+    EventBus:RegisterCallback(self.Config.Events.FTLSyncResult, self, self.OnFTLSyncResult)
     EventBus:RegisterCallback(self.Config.Events.ScanFinished, self, self.OnScanFinished)
 
     return self
@@ -97,18 +100,81 @@ function TheClassicRaceTracker:OnNetPlayerInfoBatch(payload, _)
     local batch = TheClassicRace.Serializer.DeserializePlayerInfoBatch(batchstr)
     self:ProcessPlayerInfoBatch(batch, classIndex)
 
-    -- if it wasn't a rebroadcast then it was a /who scan, we can delay our own /who scan a bit
-    if not isRebroadcast then
-        self.EventBus:PublishEvent(self.Config.Events.BumpScan, classIndex)
-    end
 end
 
 function TheClassicRaceTracker:OnSlashWhoResult(playerInfoBatch, classIndex)
-    self:ProcessPlayerInfoBatch(playerInfoBatch, classIndex)
+    local changed = {}
+    for _, playerInfo in ipairs(playerInfoBatch) do
+        local normalizedInfo, isChanged = self:ProcessPlayerInfo(playerInfo)
+        if isChanged then
+            changed[#changed + 1] = normalizedInfo
+        end
+    end
+    if #changed > 0 then
+        self:ScheduleDingPush(changed)
+    end
 end
 
 function TheClassicRaceTracker:OnSyncResult(playerInfoBatch)
     self:ProcessPlayerInfoBatch(playerInfoBatch)
+end
+
+function TheClassicRaceTracker:ScheduleDingPush(changedPlayers)
+    if not self.DB.profile.options.networking then return end
+    if self.DB.factionrealm.finished then return end
+
+    -- YELL immediately so zone players get real-time updates
+    local batchstr = TheClassicRace.Serializer.SerializePlayerInfoBatch(changedPlayers)
+    self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, {batchstr, false, 0}, "YELL")
+
+    -- accumulate into pending set (keyed by name to deduplicate across rapid scans)
+    for _, p in ipairs(changedPlayers) do
+        self.pendingDings[p.name] = p
+    end
+
+    if not self.dingPushPending then
+        self.dingPushPending = true
+        local _self = self
+        C_Timer.After(self.Config.DingPushDelay, function()
+            _self:FlushDingPush()
+        end)
+    end
+end
+
+function TheClassicRaceTracker:FlushDingPush()
+    self.dingPushPending = false
+
+    local players = {}
+    for _, p in pairs(self.pendingDings) do
+        players[#players + 1] = p
+    end
+    self.pendingDings = {}
+
+    if #players == 0 then return end
+
+    local batchstr = TheClassicRace.Serializer.SerializePlayerInfoBatch(players)
+    local payload = {batchstr, false, 0}
+
+    if IsInGuild() then
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "GUILD")
+    end
+
+    -- whisper a random sample of buddies (capped at BuddyPingBatchSize)
+    local names = {}
+    for name, _ in pairs(self.DB.factionrealm.buddies) do
+        names[#names + 1] = name
+    end
+    local batchSize = self.Config.BuddyPingBatchSize
+    if #names > batchSize then
+        for i = 1, batchSize do
+            local j = math.random(i, #names)
+            names[i], names[j] = names[j], names[i]
+        end
+        for i = batchSize + 1, #names do names[i] = nil end
+    end
+    for _, name in ipairs(names) do
+        self.Network:SendObject(self.Config.Network.Events.PlayerInfoBatch, payload, "WHISPER", name)
+    end
 end
 
 function TheClassicRaceTracker:ProcessPlayerInfoBatch(playerInfoBatch, classIndex)
@@ -258,6 +324,11 @@ function TheClassicRaceTracker:ProcessDiscoveryResponses()
 
     if #requesters == 1 then
         local needSet = self:ComputeNeedSet(requesters[1].classHashes)
+        if needSet then
+            local classes = {}
+            for ci in pairs(needSet) do classes[#classes + 1] = ci end
+            TheClassicRace:AddHashLog(requesters[1].name, ">", classes, false)
+        end
         local batches = self:CollectBatches(needSet)
         if batches then
             self:SendBatches(batches, "WHISPER", requesters[1].name)
@@ -274,6 +345,11 @@ function TheClassicRaceTracker:ProcessDiscoveryResponses()
             for classIndex, _ in pairs(needSet) do
                 unionNeedSet[classIndex] = true
             end
+        end
+        if unionNeedSet then
+            local classes = {}
+            for ci in pairs(unionNeedSet) do classes[#classes + 1] = ci end
+            TheClassicRace:AddHashLog("(zone yell)", ">", classes, false)
         end
         local batches = self:CollectBatches(unionNeedSet)
         if batches then
@@ -338,6 +414,10 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
+    -- update pioneer records for every detected player
+    self:UpdatePioneers(playerInfo)
+    self:UpdatePlayerHistory(playerInfo)
+
     -- publish internal event
     if globalIsChanged or classIsChanged then
         self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
@@ -350,4 +430,90 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
 
     -- return normalized playerinfo and boolean if anything changed
     return playerInfo, globalIsChanged or classIsChanged
+end
+
+-- Records this player's dingedAt in playerHistory for future per-character level breakdown.
+function TheClassicRaceTracker:UpdatePlayerHistory(playerInfo)
+    local dingedAt = playerInfo.dingedAt
+    if dingedAt == nil then return end
+
+    local db = self.DB.factionrealm
+    local name = playerInfo.name
+    local level = playerInfo.level
+    local classIndex = playerInfo.classIndex
+
+    if db.playerHistory[name] == nil then
+        db.playerHistory[name] = {classIndex = classIndex, levels = {}}
+    end
+
+    local hist = db.playerHistory[name]
+    if hist.classIndex == nil and classIndex ~= nil then
+        hist.classIndex = classIndex
+    end
+    -- only keep the earliest detection at each level
+    if hist.levels[level] == nil or dingedAt < hist.levels[level] then
+        hist.levels[level] = dingedAt
+    end
+end
+
+-- Updates firstToLevel (overall and per-class) and raceStartedAt for every detected player.
+function TheClassicRaceTracker:UpdatePioneers(playerInfo)
+    local dingedAt = playerInfo.dingedAt
+    if dingedAt == nil then return end
+
+    local db = self.DB.factionrealm
+    local name = playerInfo.name
+    local level = playerInfo.level
+    local classIndex = playerInfo.classIndex
+
+    -- track the earliest detection as race start
+    if db.raceStartedAt == nil or dingedAt < db.raceStartedAt then
+        db.raceStartedAt = dingedAt
+    end
+
+    -- overall (classFilter 0)
+    if db.firstToLevel[0] == nil then db.firstToLevel[0] = {} end
+    local ftl0 = db.firstToLevel[0]
+    if ftl0[level] == nil or dingedAt < ftl0[level].dingedAt
+            or (dingedAt == ftl0[level].dingedAt and name < ftl0[level].name) then
+        ftl0[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
+    end
+
+    -- per-class
+    if classIndex ~= nil and classIndex ~= 0 then
+        if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
+        local ftlC = db.firstToLevel[classIndex]
+        if ftlC[level] == nil or dingedAt < ftlC[level].dingedAt
+                or (dingedAt == ftlC[level].dingedAt and name < ftlC[level].name) then
+            ftlC[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
+        end
+    end
+end
+
+-- Merges received firstToLevel data from a sync partner, keeping the earliest record per slot.
+-- Also merges realmOpenedAt, keeping the earliest (closest to actual realm launch).
+function TheClassicRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
+    local db = self.DB.factionrealm
+
+    if remoteRealmOpenedAt and (db.realmOpenedAt == nil or remoteRealmOpenedAt < db.realmOpenedAt) then
+        db.realmOpenedAt = remoteRealmOpenedAt
+    end
+
+    for classFilter, levels in pairs(ftldb) do
+        if db.firstToLevel[classFilter] == nil then
+            db.firstToLevel[classFilter] = {}
+        end
+        for level, record in pairs(levels) do
+            local existing = db.firstToLevel[classFilter][level]
+            if existing == nil or record.dingedAt < existing.dingedAt
+                    or (record.dingedAt == existing.dingedAt and record.name < existing.name) then
+                db.firstToLevel[classFilter][level] = record
+                if db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt then
+                    db.raceStartedAt = record.dingedAt
+                end
+            end
+        end
+    end
+
+    self.EventBus:PublishEvent(self.Config.Events.RefreshGUI)
 end

@@ -56,15 +56,21 @@ function TheClassicRaceLeaderboard:ProcessPlayerInfo(playerInfo)
     local previousRank = nil
     for rank, player in ipairs(self.lbdb.players) do
         -- find the place where to insert the new player
-        -- sort by level desc, then by dingedAt asc (earlier ding = higher rank)
+        -- sort by level desc, then by dingedAt asc, then by name asc (tiebreaker)
+        -- the name tiebreaker ensures deterministic ordering across clients when
+        -- multiple players share the same level and second-precision timestamp
         if insertAtRank == nil then
             if playerInfo.level > player.level then
                 insertAtRank = rank
             elseif playerInfo.level == player.level
                     and playerInfo.dingedAt ~= nil
-                    and player.dingedAt ~= nil
-                    and playerInfo.dingedAt < player.dingedAt then
-                insertAtRank = rank
+                    and player.dingedAt ~= nil then
+                if playerInfo.dingedAt < player.dingedAt then
+                    insertAtRank = rank
+                elseif playerInfo.dingedAt == player.dingedAt
+                        and playerInfo.name < player.name then
+                    insertAtRank = rank
+                end
             end
         end
 

@@ -198,6 +198,98 @@ describe("Tracker", function()
         end)
     end)
 
+    describe("Pioneers", function()
+        it("UpdatePioneers sets raceStartedAt on first player", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            assert.equals(time, db.factionrealm.raceStartedAt)
+        end)
+
+        it("UpdatePioneers updates raceStartedAt to the minimum seen", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            tracker:ProcessPlayerInfo(playerInfo("Bob", 16, WARRIORIDX, time - 100))
+            assert.equals(time - 100, db.factionrealm.raceStartedAt)
+        end)
+
+        it("UpdatePioneers does not lower raceStartedAt for a later timestamp", function()
+            tracker:ProcessPlayerInfo(playerInfo("Bob", 16, WARRIORIDX, time - 100))
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            assert.equals(time - 100, db.factionrealm.raceStartedAt)
+        end)
+
+        it("UpdatePioneers records first player to reach each level (overall)", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            local ftl0 = db.factionrealm.firstToLevel[0]
+            assert.equals("Alice",   ftl0[15].name)
+            assert.equals(DRUIDIDX,  ftl0[15].classIndex)
+            assert.equals(time,      ftl0[15].dingedAt)
+        end)
+
+        it("UpdatePioneers records first player to reach each level (per class)", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            local ftlDruid = db.factionrealm.firstToLevel[DRUIDIDX]
+            assert.equals("Alice", ftlDruid[15].name)
+            assert.equals(time,    ftlDruid[15].dingedAt)
+        end)
+
+        it("UpdatePioneers keeps earliest record per level (overall)", function()
+            tracker:ProcessPlayerInfo(playerInfo("Bob",   15, WARRIORIDX, time))
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX,   time - 100))
+            assert.equals("Alice", db.factionrealm.firstToLevel[0][15].name)
+        end)
+
+        it("UpdatePioneers does not overwrite an earlier record with a later one", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX,   time - 100))
+            tracker:ProcessPlayerInfo(playerInfo("Bob",   15, WARRIORIDX, time))
+            assert.equals("Alice", db.factionrealm.firstToLevel[0][15].name)
+        end)
+
+        it("UpdatePioneers uses name as tiebreaker when dingedAt is equal", function()
+            tracker:ProcessPlayerInfo(playerInfo("Zebra",    15, WARRIORIDX, time))
+            tracker:ProcessPlayerInfo(playerInfo("Aardvark", 15, DRUIDIDX,   time))
+            assert.equals("Aardvark", db.factionrealm.firstToLevel[0][15].name)
+        end)
+
+        it("UpdatePlayerHistory records dingedAt per level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            local hist = db.factionrealm.playerHistory["Alice"]
+            assert.equals(time,     hist.levels[15])
+            assert.equals(DRUIDIDX, hist.classIndex)
+        end)
+
+        it("UpdatePlayerHistory keeps earliest dingedAt per level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time))
+            tracker:ProcessPlayerInfo(playerInfo("Alice", 15, DRUIDIDX, time - 50))
+            assert.equals(time - 50, db.factionrealm.playerHistory["Alice"].levels[15])
+        end)
+
+        it("OnFTLSyncResult merges remote firstToLevel into local DB", function()
+            local ftldb = {
+                [0] = {[10] = {name = "Remote", classIndex = WARRIORIDX, dingedAt = time - 200}},
+            }
+            tracker:OnFTLSyncResult(ftldb)
+            assert.equals("Remote",  db.factionrealm.firstToLevel[0][10].name)
+            assert.equals(time - 200, db.factionrealm.raceStartedAt)
+        end)
+
+        it("OnFTLSyncResult keeps local record when it is earlier", function()
+            tracker:ProcessPlayerInfo(playerInfo("Local", 10, DRUIDIDX, time - 500))
+            local ftldb = {
+                [0] = {[10] = {name = "Remote", classIndex = WARRIORIDX, dingedAt = time - 200}},
+            }
+            tracker:OnFTLSyncResult(ftldb)
+            assert.equals("Local", db.factionrealm.firstToLevel[0][10].name)
+        end)
+
+        it("OnFTLSyncResult overwrites local record when remote is earlier", function()
+            tracker:ProcessPlayerInfo(playerInfo("Local", 10, DRUIDIDX, time - 100))
+            local ftldb = {
+                [0] = {[10] = {name = "Remote", classIndex = WARRIORIDX, dingedAt = time - 500}},
+            }
+            tracker:OnFTLSyncResult(ftldb)
+            assert.equals("Remote", db.factionrealm.firstToLevel[0][10].name)
+        end)
+    end)
+
     describe("RaceFinished", function()
         it("produces RaceFinished event once", function()
             local eventBusSpy = spy.on(eventbus, "PublishEvent")

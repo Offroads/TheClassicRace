@@ -8,10 +8,10 @@ local TheClassicRaceDefaultDB = {
                 hide = false,
             },
             networking = true,
-            dontbump = false,
             maxLevelNotify = true,
             classTopN = 3,
             globalTopN = 5,
+            debug = false,
         },
         gui = {
             display = true,
@@ -32,6 +32,17 @@ local TheClassicRaceDefaultDB = {
                 players = {},
             },
         },
+        -- Pioneers: first player to reach each level
+        -- realmOpenedAt: GetServerTime() recorded on first-ever DB init for this realm; synced to keep earliest
+        realmOpenedAt = nil,
+        -- raceStartedAt: earliest dingedAt ever seen; fallback reference when realmOpenedAt is nil
+        raceStartedAt = nil,
+        -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
+        playerHistory = {},
+        -- firstToLevel[classFilter][level] = {name, classIndex, dingedAt}
+        -- classFilter 0 = overall, 1-11 = per class
+        firstToLevel = {},
+        pioneersMigrated = false,
     },
 }
 
