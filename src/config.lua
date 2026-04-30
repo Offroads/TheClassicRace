@@ -150,7 +150,6 @@ local TheClassicRaceConfig = {
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",
-        BumpScan = "BUMP_SCAN",
         Ding = "DING",
         -- ScanFinished(endofrace)
         -- should use RaceFinished though if interested in when the race is finished,

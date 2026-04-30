@@ -98,10 +98,6 @@ function TheClassicRaceTracker:OnNetPlayerInfoBatch(payload, _)
     local batch = TheClassicRace.Serializer.DeserializePlayerInfoBatch(batchstr)
     self:ProcessPlayerInfoBatch(batch, classIndex)
 
-    -- if it wasn't a rebroadcast then it was a /who scan, we can delay our own /who scan a bit
-    if not isRebroadcast then
-        self.EventBus:PublishEvent(self.Config.Events.BumpScan, classIndex)
-    end
 end
 
 function TheClassicRaceTracker:OnSlashWhoResult(playerInfoBatch, classIndex)

@@ -67,9 +67,6 @@ end
 function TheClassicRaceScanner:InitTicker(offset)
 end
 
-function TheClassicRaceScanner:OnBumpScan(classIndex)
-end
-
 function TheClassicRaceScanner:OnWhoListUpdate()
     -- Restore FriendsFrame so manual /who works normally again
     local ff = _G.FriendsFrame

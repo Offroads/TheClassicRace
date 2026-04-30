@@ -8,7 +8,6 @@ local TheClassicRaceDefaultDB = {
                 hide = false,
             },
             networking = true,
-            dontbump = false,
             maxLevelNotify = true,
             classTopN = 3,
             globalTopN = 5,
