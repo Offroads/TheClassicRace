@@ -47,6 +47,8 @@ function TheClassicRaceStatusFrame.new(Config, Core, DB, EventBus)
     self.contentframe = nil
     self.refreshPending = false
 
+    self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
+
     self.pioneersView = TheClassicRace.PioneersView(Config, Core, DB)
 
     self:OnRefreshGUI()
@@ -124,6 +126,7 @@ function TheClassicRaceStatusFrame:Show()
     TheClassicRaceStatusFrame.FixResizeStatusUpdates(frame)
     frame:DoLayout()
 
+    self.players = self.DB.factionrealm.leaderboard[self.classIndex].players
     self.frame = frame
 
     self:RenderLeftIcon()
