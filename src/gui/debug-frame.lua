@@ -10,13 +10,15 @@ local AceGUI = LibStub("AceGUI-3.0")
 -- WoW API
 local GetServerTime, math = _G.GetServerTime, _G.math
 
-local WHITE = "|cffffffff"
+local WHITE  = "|cffffffff"
 local YELLOW = "|cffffff00"
-local GRAY  = "|cff888888"
-local DIM   = "|cff555555"
+local GRAY   = "|cff888888"
 
-local COL_EVENT = 165
-local COL_COUNT = 57
+-- Relative column widths — must sum to < 1.0 so the leftover gap never
+-- fits the next row's first widget, guaranteeing correct line breaks in
+-- AceGUI's Flow layout.
+local REL_EVENT = 0.62
+local REL_COUNT = 0.18   -- two count columns * 0.18 = 0.36 → total 0.98
 
 -- Human-readable names for network event codes
 local EVENT_NAMES = {
@@ -144,21 +146,22 @@ function TheClassicRaceDebugFrame:Show()
     self:Render()
 end
 
--- Adds a 3-column table row to the scroll container.
+-- Three-column row using relative widths so the columns always fill the
+-- container and the Flow layout never places the next row on the same line.
 function TheClassicRaceDebugFrame:AddRow(col1, col2, col3, col1Color, col2Color, col3Color)
     local nameLabel = AceGUI:Create("Label")
-    nameLabel:SetWidth(COL_EVENT)
+    nameLabel:SetRelativeWidth(REL_EVENT)
     nameLabel:SetText((col1Color or WHITE) .. col1 .. "|r")
     self.scroll:AddChild(nameLabel)
 
     local sentLabel = AceGUI:Create("Label")
-    sentLabel:SetWidth(COL_COUNT)
+    sentLabel:SetRelativeWidth(REL_COUNT)
     sentLabel:SetText((col2Color or WHITE) .. col2 .. "|r")
     sentLabel:SetJustifyH("RIGHT")
     self.scroll:AddChild(sentLabel)
 
     local recvLabel = AceGUI:Create("Label")
-    recvLabel:SetWidth(COL_COUNT)
+    recvLabel:SetRelativeWidth(REL_COUNT)
     recvLabel:SetText((col3Color or WHITE) .. col3 .. "|r")
     recvLabel:SetJustifyH("RIGHT")
     self.scroll:AddChild(recvLabel)
@@ -167,7 +170,7 @@ end
 function TheClassicRaceDebugFrame:AddSeparator()
     local sep = AceGUI:Create("Label")
     sep:SetFullWidth(true)
-    sep:SetText(DIM .. string.rep("\xe2\x94\x80", 36) .. "|r")
+    sep:SetText(GRAY .. string.rep("-", 32) .. "|r")
     self.scroll:AddChild(sep)
 end
 
@@ -190,7 +193,6 @@ function TheClassicRaceDebugFrame:RenderMsgStats()
     local stats = TheClassicRace.MsgStats
     if not stats then return end
 
-    -- collect union of all event types seen
     local allEvents = {}
     local seen = {}
     for event in pairs(stats.send) do
@@ -201,8 +203,7 @@ function TheClassicRaceDebugFrame:RenderMsgStats()
     end
     table.sort(allEvents)
 
-    -- header row
-    self:AddRow("Message Type", "Sent", "Recv", YELLOW, YELLOW, YELLOW)
+    self:AddRow("Message Type", "Snt", "Rcv", YELLOW, YELLOW, YELLOW)
     self:AddSeparator()
 
     if #allEvents == 0 then
@@ -218,11 +219,11 @@ function TheClassicRaceDebugFrame:RenderMsgStats()
             totalSend = totalSend + s
             totalRecv = totalRecv + r
             local name = EVENT_NAMES[event] or event
-            local sColor = s > 0 and WHITE or GRAY
-            local rColor = r > 0 and WHITE or GRAY
-            self:AddRow(name, tostring(s), tostring(r), WHITE, sColor, rColor)
+            self:AddRow(name, tostring(s), tostring(r),
+                WHITE,
+                s > 0 and WHITE or GRAY,
+                r > 0 and WHITE or GRAY)
         end
-
         self:AddSeparator()
         self:AddRow("Total", tostring(totalSend), tostring(totalRecv), YELLOW, YELLOW, YELLOW)
     end
