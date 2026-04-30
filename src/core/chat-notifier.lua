@@ -48,22 +48,27 @@ end
 
 
 function TheClassicRaceChatNotifier:ShouldReport(playerInfo, globalRank, classRank)
-    -- ignore old dings unless rank 1
+    -- ignore stale detections (>10 min old) unless rank 1
     if playerInfo.dingedAt < self.Core:Now() - 600
             and (globalRank == nil or globalRank > 1)
             and (classRank == nil or classRank > 1) then
         return false
     end
 
-    if self.DB.profile.options.maxLevelNotify and playerInfo.level >= self.Config.MaxLevel then
-        return true
-    end
-
+    -- sliders are the primary gate
     if classRank ~= nil and classRank <= self.DB.profile.options.classTopN then
         return true
     end
 
     if globalRank ~= nil and globalRank <= self.DB.profile.options.globalTopN then
+        return true
+    end
+
+    -- maxLevelNotify only fires for rank-1 (first to max level globally or per class),
+    -- so it doesn't spam when many players are already at max level
+    if self.DB.profile.options.maxLevelNotify
+            and playerInfo.level >= self.Config.MaxLevel
+            and (globalRank == 1 or classRank == 1) then
         return true
     end
 
