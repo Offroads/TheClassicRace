@@ -490,6 +490,7 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
 
     if not leaderboardsDiffer and not ftlDiffers then return end
 
+    local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
         for classIndex = 0, #self.Config.Classes do
@@ -498,6 +499,7 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
                 local myHash = myPerClassHashes[classIndex + 1]
                 local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
                 if myHash ~= theirHash then
+                    diffClasses[#diffClasses + 1] = classIndex
                     self:Sync(sender, classIndex)
                 end
             end
@@ -506,6 +508,10 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
 
     if ftlDiffers then
         self:SyncFTL(sender)
+    end
+
+    if leaderboardsDiffer or ftlDiffers then
+        TheClassicRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
     end
 end
 
@@ -526,6 +532,7 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
     local leaderboardsDiffer = myFullHash ~= senderFullHash
     local ftlDiffers = senderFTLHash == nil or senderFTLHash ~= myFTLHash
 
+    local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
         for classIndex = 0, #self.Config.Classes do
@@ -534,6 +541,7 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
                 local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
                 local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
                 if myHash ~= theirHash then
+                    diffClasses[#diffClasses + 1] = classIndex
                     self:Sync(sender, classIndex)
                 end
             end
@@ -542,6 +550,10 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
 
     if ftlDiffers then
         self:SyncFTL(sender)
+    end
+
+    if leaderboardsDiffer or ftlDiffers then
+        TheClassicRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
     end
 end
 

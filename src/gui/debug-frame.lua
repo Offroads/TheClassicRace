@@ -13,6 +13,11 @@ local GetServerTime, math = _G.GetServerTime, _G.math
 local WHITE  = "|cffffffff"
 local YELLOW = "|cffffff00"
 local GRAY   = "|cff888888"
+local GREEN  = "|cff44ff44"
+local ORANGE = "|cffffaa00"
+
+-- Short label for a class index used in hash log display
+local CLASS_SHORT = { [0]="G","Wa","Pa","Hu","Ro","Pr","DK","Sh","Ma","Wl","Mo","Dr","DH" }
 
 -- Relative column widths — must sum to < 1.0 so the leftover gap never
 -- fits the next row's first widget, guaranteeing correct line breaks in
@@ -185,6 +190,7 @@ function TheClassicRaceDebugFrame:Render()
     if not self.scroll then return end
     self.scroll:ReleaseChildren()
     self:RenderMsgStats()
+    self:RenderHashLog()
     self:RenderBuddies()
     self.scroll:DoLayout()
 end
@@ -226,6 +232,45 @@ function TheClassicRaceDebugFrame:RenderMsgStats()
         end
         self:AddSeparator()
         self:AddRow("Total", tostring(totalSend), tostring(totalRecv), YELLOW, YELLOW, YELLOW)
+    end
+
+    self:AddSpacer()
+end
+
+function TheClassicRaceDebugFrame:RenderHashLog()
+    local log = TheClassicRace.HashLog
+    if not log or #log == 0 then return end
+
+    local header = AceGUI:Create("Label")
+    header:SetFullWidth(true)
+    header:SetText(YELLOW .. "Hash Mismatches|r")
+    self.scroll:AddChild(header)
+
+    self:AddSeparator()
+
+    for _, entry in ipairs(log) do
+        local t = entry.time
+        local timeStr = string.format("%02d:%02d:%02d",
+            math.floor(t / 3600) % 24,
+            math.floor(t / 60) % 60,
+            t % 60)
+
+        local arrow = entry.direction == ">" and GREEN .. ">|r" or ORANGE .. "<|r"
+
+        local parts = {}
+        table.sort(entry.classes)
+        for _, ci in ipairs(entry.classes) do
+            parts[#parts + 1] = CLASS_SHORT[ci] or tostring(ci)
+        end
+        if entry.ftl then parts[#parts + 1] = "FTL" end
+        local clsStr = #parts > 0 and table.concat(parts, ",") or "?"
+
+        local label = AceGUI:Create("Label")
+        label:SetFullWidth(true)
+        label:SetText(GRAY .. timeStr .. "|r " .. arrow .. " "
+                .. WHITE .. entry.sender .. "|r "
+                .. GRAY .. "[" .. clsStr .. "]|r")
+        self.scroll:AddChild(label)
     end
 
     self:AddSpacer()

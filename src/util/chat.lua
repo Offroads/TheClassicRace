@@ -52,6 +52,24 @@ function TheClassicRace:TracePrintTable(t)
     end
 end
 
+-- Records a hash mismatch event into HashLog (newest first, capped at 12).
+-- direction: ">" we sent data to sender, "<" we received data from sender.
+-- classes: list of classIndex values that differed (0=global).
+-- ftl: boolean, whether FTL also differed.
+function TheClassicRace:AddHashLog(sender, direction, classes, ftl)
+    if not self.DB or not self.DB.profile.options.debug then return end
+    local GetServerTime = _G.GetServerTime
+    table.insert(self.HashLog, 1, {
+        time      = GetServerTime(),
+        sender    = sender,
+        direction = direction,
+        classes   = classes or {},
+        ftl       = ftl or false,
+    })
+    while #self.HashLog > 12 do table.remove(self.HashLog) end
+    self.EventBus:PublishEvent(self.Config.Events.MsgStats)
+end
+
 function TheClassicRace:PlayerChatLink(playerName, linkTitle, className)
     if linkTitle == nil then
         linkTitle = playerName

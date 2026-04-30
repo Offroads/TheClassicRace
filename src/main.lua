@@ -53,8 +53,9 @@ function TheClassicRace:OnInitialize()
 
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
 
-    -- message stats counters (only populated when debug mode is on)
+    -- message stats counters and hash mismatch log (only populated when debug mode is on)
     TheClassicRace.MsgStats = { send = {}, recv = {} }
+    TheClassicRace.HashLog = {}
 
     self:DBMigrations()
 

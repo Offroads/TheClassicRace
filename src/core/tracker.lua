@@ -324,6 +324,11 @@ function TheClassicRaceTracker:ProcessDiscoveryResponses()
 
     if #requesters == 1 then
         local needSet = self:ComputeNeedSet(requesters[1].classHashes)
+        if needSet then
+            local classes = {}
+            for ci in pairs(needSet) do classes[#classes + 1] = ci end
+            TheClassicRace:AddHashLog(requesters[1].name, ">", classes, false)
+        end
         local batches = self:CollectBatches(needSet)
         if batches then
             self:SendBatches(batches, "WHISPER", requesters[1].name)
@@ -340,6 +345,11 @@ function TheClassicRaceTracker:ProcessDiscoveryResponses()
             for classIndex, _ in pairs(needSet) do
                 unionNeedSet[classIndex] = true
             end
+        end
+        if unionNeedSet then
+            local classes = {}
+            for ci in pairs(unionNeedSet) do classes[#classes + 1] = ci end
+            TheClassicRace:AddHashLog("(zone yell)", ">", classes, false)
         end
         local batches = self:CollectBatches(unionNeedSet)
         if batches then
