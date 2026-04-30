@@ -203,7 +203,7 @@ function TheClassicRaceScanner:TriggerScan()
         query = tostring(scanMin) .. "-" .. tostring(maxLevel)
     end
 
-    TheClassicRace:PPrint("Scanning /who " .. query)
+    TheClassicRace:DebugPrint("Scanning /who " .. query)
 
     if C_FriendList then
         local ff = _G.FriendsFrame
