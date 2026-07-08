@@ -72,6 +72,48 @@ describe("Leaderboard", function()
             local h2 = TheClassicRace.Leaderboard.ComputeHash(dbboard)
             assert.equals(h1, h2)
         end)
+
+        it("is insertion-order independent", function()
+            local players = {
+                {name = "Alice", level = 6, dingedAt = time, classIndex = 3},
+                {name = "Bob", level = 5, dingedAt = time - 10, classIndex = 1},
+                {name = "Zebra", level = 5, dingedAt = time, classIndex = 11},
+                {name = "Aardvark", level = 5, dingedAt = time, classIndex = 0},
+            }
+
+            leaderboard:ProcessPlayerInfo(players[1])
+            leaderboard:ProcessPlayerInfo(players[2])
+            leaderboard:ProcessPlayerInfo(players[3])
+            leaderboard:ProcessPlayerInfo(players[4])
+            local h1 = TheClassicRace.Leaderboard.ComputeHash(dbboard)
+
+            local dbboard2 = db.factionrealm.leaderboard[1]
+            local leaderboard2 = TheClassicRace.Leaderboard(config, dbboard2)
+            leaderboard2:ProcessPlayerInfo(players[4])
+            leaderboard2:ProcessPlayerInfo(players[3])
+            leaderboard2:ProcessPlayerInfo(players[2])
+            leaderboard2:ProcessPlayerInfo(players[1])
+            local h2 = TheClassicRace.Leaderboard.ComputeHash(dbboard2)
+
+            assert.equals(h1, h2)
+            assert.same(dbboard.players, dbboard2.players)
+        end)
+    end)
+
+    describe("SortPlayers", function()
+        it("orders legacy data canonically", function()
+            local players = {
+                {name = "Zebra", level = 5, dingedAt = time, classIndex = 11},
+                {name = "NoDing", level = 5, classIndex = 1},
+                {name = "Aardvark", level = 5, dingedAt = time, classIndex = 0},
+                {name = "Top", level = 7, dingedAt = time, classIndex = 3},
+                {name = "Early", level = 5, dingedAt = time - 10, classIndex = 1},
+            }
+            TheClassicRace.Leaderboard.SortPlayers(players)
+
+            assert.same({"Top", "Early", "Aardvark", "Zebra", "NoDing"},
+                    {players[1].name, players[2].name, players[3].name, players[4].name, players[5].name})
+        end)
     end)
 
     describe("leaderboard", function()
@@ -168,6 +210,45 @@ describe("Leaderboard", function()
             assert.equals(1, #dbboard.players)
             assert.equals(time, dbboard.players[1].dingedAt)
             assert.is_nil(changed)
+        end)
+
+        it("ignores stale lower-level info for existing player", function()
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 25, dingedAt = time, classIndex = 11})
+            -- an earlier dingedAt at a lower level is stale data, not an update
+            local rank, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 20, dingedAt = time - 100, classIndex = 11})
+
+            assert.equals(1, #dbboard.players)
+            assert.equals(25, dbboard.players[1].level)
+            assert.equals(time, dbboard.players[1].dingedAt)
+            assert.is_nil(changed)
+        end)
+
+        it("fills in a previously unknown classIndex in place", function()
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 0})
+            local rank, changed = leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
+
+            assert.equals(1, #dbboard.players)
+            assert.equals(11, dbboard.players[1].classIndex)
+            -- not a ding, no notification
+            assert.is_nil(changed)
+        end)
+
+        it("keeps a known classIndex when a ding comes without class info", function()
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 6, dingedAt = time + 10, classIndex = 0})
+
+            assert.equals(1, #dbboard.players)
+            assert.equals(6, dbboard.players[1].level)
+            assert.equals(11, dbboard.players[1].classIndex)
+        end)
+
+        it("fills in a missing dingedAt from a synced copy", function()
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, classIndex = 11})
+            assert.is_nil(dbboard.players[1].dingedAt)
+
+            leaderboard:ProcessPlayerInfo({name = "Nub1", level = 5, dingedAt = time, classIndex = 11})
+            assert.equals(1, #dbboard.players)
+            assert.equals(time, dbboard.players[1].dingedAt)
         end)
 
         it("truncates on ding", function()

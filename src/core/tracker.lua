@@ -39,6 +39,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     self.dingPushPending = false
 
     self:ReinitLeaderboards()
+    self:NormalizeDB()
 
     -- subscribe to network events
     EventBus:RegisterCallback(self.Config.Network.Events.PlayerInfoBatch, self, self.OnNetPlayerInfoBatch)
@@ -58,6 +59,34 @@ function TheClassicRaceTracker:ReinitLeaderboards()
     self.lbPerClass = {}
     for classIndex, _ in ipairs(self.Config.Classes) do
         self.lbPerClass[classIndex] = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
+    end
+end
+
+-- Heals data persisted by older versions: floors fractional timestamps and re-sorts
+-- every leaderboard into the canonical order. Stored order predating the deterministic
+-- sort otherwise causes permanent hash mismatches between clients holding identical data.
+function TheClassicRaceTracker:NormalizeDB()
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb then
+            for _, player in ipairs(lb.players) do
+                if player.dingedAt ~= nil then
+                    player.dingedAt = math.floor(player.dingedAt)
+                end
+            end
+            TheClassicRace.Leaderboard.SortPlayers(lb.players)
+        end
+    end
+
+    local ftl = self.DB.factionrealm.firstToLevel
+    if ftl then
+        for _, levels in pairs(ftl) do
+            for _, record in pairs(levels) do
+                if record.dingedAt ~= nil then
+                    record.dingedAt = math.floor(record.dingedAt)
+                end
+            end
+        end
     end
 end
 
@@ -362,6 +391,8 @@ end
 -- If ours differs, whisper back a data request with our per-class hashes
 -- so the responder can skip sending leaderboards we already agree on.
 function TheClassicRaceTracker:OnNetDataAvailable(hash, sender)
+    if not self.DB.profile.options.networking then return end
+
     local myHash = self:ComputeFullHash()
     if myHash == hash then return end
 
@@ -379,6 +410,7 @@ end
 -- Received when someone wants our data. Only accepted during the active
 -- discovery window opened by SendDiscoveryBeacon.
 function TheClassicRaceTracker:OnNetDataRequest(classHashes, sender)
+    if not self.DB.profile.options.networking then return end
     if self.pendingRequesters == nil then return end
     for _, req in ipairs(self.pendingRequesters) do
         if req.name == sender then return end
@@ -399,6 +431,9 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
     if playerInfo.dingedAt == nil then
         playerInfo.dingedAt = self.Core:Now()
     end
+    -- keep timestamps integral: the wire format truncates to whole seconds, so a
+    -- fractional local value would hash differently from its synced copy
+    playerInfo.dingedAt = math.floor(playerInfo.dingedAt)
 
     if playerInfo.classIndex == nil and playerInfo.class ~= nil then
         playerInfo.classIndex = self.Core:ClassIndex(playerInfo.class)
@@ -410,7 +445,8 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
 
     local globalRank, globalIsChanged = self.lbGlobal:ProcessPlayerInfo(playerInfo)
     local classRank, classIsChanged, classLowestLevel = nil, nil
-    if playerInfo.classIndex ~= nil then
+    -- classIndex 0 (unknown class) has no class leaderboard
+    if playerInfo.classIndex ~= nil and self.lbPerClass[playerInfo.classIndex] ~= nil then
         classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
@@ -456,6 +492,26 @@ function TheClassicRaceTracker:UpdatePlayerHistory(playerInfo)
     end
 end
 
+-- Applies a record to the firstToLevel slot levels[level], keeping the earliest
+-- dingedAt with name as deterministic tiebreaker. On otherwise identical records
+-- a missing classIndex is filled in, so clients holding the same record with and
+-- without class info converge on the same hash instead of mismatching forever.
+-- Returns true when the slot was replaced.
+local function mergeFTLRecord(levels, level, name, classIndex, dingedAt)
+    local existing = levels[level]
+    if existing == nil or dingedAt < existing.dingedAt
+            or (dingedAt == existing.dingedAt and name < existing.name) then
+        levels[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
+        return true
+    end
+    if dingedAt == existing.dingedAt and name == existing.name
+            and (existing.classIndex == nil or existing.classIndex == 0)
+            and classIndex ~= nil and classIndex ~= 0 then
+        existing.classIndex = classIndex
+    end
+    return false
+end
+
 -- Updates firstToLevel (overall and per-class) and raceStartedAt for every detected player.
 function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     local dingedAt = playerInfo.dingedAt
@@ -466,6 +522,9 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     local level = playerInfo.level
     local classIndex = playerInfo.classIndex
 
+    -- level 1 is not a ding, and levels above 99 don't fit the 2-digit wire format
+    if level < 2 or level > 99 then return end
+
     -- track the earliest detection as race start
     if db.raceStartedAt == nil or dingedAt < db.raceStartedAt then
         db.raceStartedAt = dingedAt
@@ -473,20 +532,12 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
 
     -- overall (classFilter 0)
     if db.firstToLevel[0] == nil then db.firstToLevel[0] = {} end
-    local ftl0 = db.firstToLevel[0]
-    if ftl0[level] == nil or dingedAt < ftl0[level].dingedAt
-            or (dingedAt == ftl0[level].dingedAt and name < ftl0[level].name) then
-        ftl0[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
-    end
+    mergeFTLRecord(db.firstToLevel[0], level, name, classIndex, dingedAt)
 
     -- per-class
     if classIndex ~= nil and classIndex ~= 0 then
         if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
-        local ftlC = db.firstToLevel[classIndex]
-        if ftlC[level] == nil or dingedAt < ftlC[level].dingedAt
-                or (dingedAt == ftlC[level].dingedAt and name < ftlC[level].name) then
-            ftlC[level] = {name = name, classIndex = classIndex, dingedAt = dingedAt}
-        end
+        mergeFTLRecord(db.firstToLevel[classIndex], level, name, classIndex, dingedAt)
     end
 end
 
@@ -504,11 +555,12 @@ function TheClassicRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
             db.firstToLevel[classFilter] = {}
         end
         for level, record in pairs(levels) do
-            local existing = db.firstToLevel[classFilter][level]
-            if existing == nil or record.dingedAt < existing.dingedAt
-                    or (record.dingedAt == existing.dingedAt and record.name < existing.name) then
-                db.firstToLevel[classFilter][level] = record
-                if db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt then
+            -- only merge records that fit the wire format; remote data is untrusted
+            if type(level) == "number" and level >= 2 and level <= 99
+                    and record.name ~= nil and record.dingedAt ~= nil then
+                local merged = mergeFTLRecord(db.firstToLevel[classFilter], level,
+                        record.name, record.classIndex, record.dingedAt)
+                if merged and (db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt) then
                     db.raceStartedAt = record.dingedAt
                 end
             end

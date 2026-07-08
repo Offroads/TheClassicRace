@@ -129,6 +129,32 @@ describe("Serializer", function()
             assert.equals("Aardvark", result[0][5].name)
         end)
 
+        it("skips entries that don't fit the wire format on serialize", function()
+            local t = 1000000000
+            local ftl = {
+                [0] = {
+                    [1] = {name = "Fresh", classIndex = 1, dingedAt = t},
+                    [100] = {name = "Impossible", classIndex = 1, dingedAt = t},
+                    [10] = {name = "Racer", classIndex = 1, dingedAt = t},
+                },
+            }
+            local result = DeserFTLBatch(SerFTLBatch(ftl))
+            assert.is_nil(result[0][1])
+            assert.is_nil(result[0][100])
+            assert.equals("Racer", result[0][10].name)
+        end)
+
+        it("ignores level-1 entries on deserialize", function()
+            local t = 1000000000
+            local str = string.sub("0000000000" .. t, -10)
+                    .. "$"
+                    .. "000101Fresh0$"   -- level 1 entry, invalid
+                    .. "000501Racer0$"   -- level 5 entry, valid
+            local result = DeserFTLBatch(str)
+            assert.is_nil(result[0][1])
+            assert.equals("Racer", result[0][5].name)
+        end)
+
         it("handles single-digit class indexes correctly", function()
             local t = 1000000000
             local ftl = {

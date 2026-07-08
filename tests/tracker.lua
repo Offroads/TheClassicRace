@@ -63,6 +63,7 @@ describe("Tracker", function()
 
 
     before_each(function()
+        _G.C_Timer.Reset()
         config = merge(TheClassicRace.Config, {MaxLeaderboardSize = 5})
         db = LibStub("AceDB-3.0"):New("TheClassicRace_DB", TheClassicRace.DefaultDB, true)
         db:ResetDB()
@@ -160,7 +161,7 @@ describe("Tracker", function()
             assert.spy(networkSpy).was_not_called()
         end)
 
-        it("should bump ticker on OnNetPlayerInfo", function()
+        it("should publish Ding on OnNetPlayerInfo", function()
             local eventBusSpy = spy.on(eventbus, "PublishEvent")
 
             tracker:OnNetPlayerInfoBatch({
@@ -169,21 +170,37 @@ describe("Tracker", function()
                 }), false, DRUIDIDX
             })
 
-            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.BumpScan, DRUIDIDX)
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), config.Events.Ding,
                     match.is_table(), 1, 1)
 
-            assert.spy(eventBusSpy).called_at_most(2)
+            assert.spy(eventBusSpy).called_at_most(1)
+        end)
+
+        it("handles unknown classIndex (0) in a batch without error", function()
+            tracker:OnNetPlayerInfoBatch({
+                TheClassicRace.Serializer.SerializePlayerInfoBatch({
+                    {name = "Nubone", level = 7, classIndex = 0, dingedAt = 100},
+                }), false, 0
+            })
+
+            assert.equals(1, #db.factionrealm.leaderboard[0].players)
+            assert.equals(0, db.factionrealm.leaderboard[0].players[1].classIndex)
         end)
 
         it("should broadcast to network OnSlashWhoResult", function()
             local networkSpy = spy.on(network, "SendObject")
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
+            -- yells immediately for real-time zone updates
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
-                    match.is_table(), "CHANNEL")
+                    match.is_table(), "YELL")
+            assert.spy(networkSpy).called_at_most(1)
+
+            -- guild push is batched behind DingPushDelay
+            _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
                     match.is_table(), "GUILD")
+            assert.spy(networkSpy).called_at_most(2)
         end)
 
         it("should broadcast to network OnSlashWhoResult, not to guild when not in guild", function()
@@ -193,7 +210,10 @@ describe("Tracker", function()
 
             tracker:OnSlashWhoResult({ playerInfo("Nubone", 5), })
             assert.spy(networkSpy).was_called_with(match.is_ref(network), config.Network.Events.PlayerInfoBatch,
-                    match.is_table(), "CHANNEL")
+                    match.is_table(), "YELL")
+            assert.spy(networkSpy).called_at_most(1)
+
+            _G.C_Timer.Advance(config.DingPushDelay)
             assert.spy(networkSpy).called_at_most(1)
         end)
     end)
@@ -325,11 +345,97 @@ describe("Tracker", function()
             assert.spy(lbSpies[PRIESTIDX]).was_called_with(match.is_ref(tracker.lbPerClass[PRIESTIDX]), nub5)
 
             assert.equals(3, #db.factionrealm.leaderboard[0].players)
+            -- canonical order: level desc, dingedAt asc, name asc
             assert.same({
-                {name = "Nubthree", level = 5, dingedAt = time, classIndex = DRUIDIDX},
-                {name = "Nubfour", level = 5, dingedAt = time, classIndex = PALADINIDX},
                 {name = "Nubfive", level = 5, dingedAt = time - 100, classIndex = PRIESTIDX},
+                {name = "Nubfour", level = 5, dingedAt = time, classIndex = PALADINIDX},
+                {name = "Nubthree", level = 5, dingedAt = time, classIndex = DRUIDIDX},
             }, db.factionrealm.leaderboard[0].players)
+        end)
+    end)
+
+    describe("Convergence", function()
+        it("NormalizeDB re-sorts legacy leaderboard order and floors timestamps", function()
+            db.factionrealm.leaderboard[0].players = {
+                {name = "Zebra", level = 5, dingedAt = time + 0.7, classIndex = DRUIDIDX},
+                {name = "Aardvark", level = 5, dingedAt = time, classIndex = WARRIORIDX},
+                {name = "Top", level = 7, dingedAt = time, classIndex = PRIESTIDX},
+            }
+
+            -- constructing a tracker normalizes the persisted data
+            TheClassicRace.Tracker(config, core, db, TheClassicRace.EventBus(), network)
+
+            assert.same({
+                {name = "Top", level = 7, dingedAt = time, classIndex = PRIESTIDX},
+                {name = "Aardvark", level = 5, dingedAt = time, classIndex = WARRIORIDX},
+                {name = "Zebra", level = 5, dingedAt = time, classIndex = DRUIDIDX},
+            }, db.factionrealm.leaderboard[0].players)
+        end)
+
+        it("clients converge on identical hashes after one bidirectional sync", function()
+            -- regression for issue #16: A knows the player's class at a stale lower
+            -- level, B has the newer level but doesn't know the class
+            local dbB = LibStub("AceDB-3.0"):New("TheClassicRace_DB_B", TheClassicRace.DefaultDB, true)
+            dbB:ResetDB()
+            local trackerB = TheClassicRace.Tracker(config, core, dbB, TheClassicRace.EventBus(), network)
+
+            tracker:ProcessPlayerInfo({name = "Racer", level = 20, classIndex = DRUIDIDX, dingedAt = time - 100})
+            trackerB:ProcessPlayerInfo({name = "Racer", level = 25, classIndex = 0, dingedAt = time})
+            assert.not_equals(tracker:ComputeFullHash(), trackerB:ComputeFullHash())
+
+            -- exchange all leaderboards both ways through the wire format,
+            -- snapshotting both sides first like the real sync exchange does
+            local wire = function(t)
+                local strs = {}
+                for _, b in ipairs(t:CollectBatches(nil) or {}) do
+                    strs[#strs + 1] = TheClassicRace.Serializer.SerializePlayerInfoBatch(b.players)
+                end
+                return strs
+            end
+            local batchesA, batchesB = wire(tracker), wire(trackerB)
+            for _, str in ipairs(batchesB) do
+                tracker:OnSyncResult(TheClassicRace.Serializer.DeserializePlayerInfoBatch(str))
+            end
+            for _, str in ipairs(batchesA) do
+                trackerB:OnSyncResult(TheClassicRace.Serializer.DeserializePlayerInfoBatch(str))
+            end
+
+            assert.equals(tracker:ComputeFullHash(), trackerB:ComputeFullHash())
+            -- both ended up with the latest level and the known class
+            assert.same({name = "Racer", level = 25, dingedAt = time, classIndex = DRUIDIDX},
+                    db.factionrealm.leaderboard[0].players[1])
+            assert.same({name = "Racer", level = 25, dingedAt = time, classIndex = DRUIDIDX},
+                    dbB.factionrealm.leaderboard[0].players[1])
+        end)
+
+        it("UpdatePioneers ignores level 1", function()
+            tracker:ProcessPlayerInfo(playerInfo("Fresh", 1, DRUIDIDX, time))
+            assert.is_nil(db.factionrealm.firstToLevel[0])
+        end)
+
+        it("OnFTLSyncResult fills in a missing classIndex on otherwise identical records", function()
+            tracker:ProcessPlayerInfo({name = "Racer", level = 10, classIndex = 0, dingedAt = time})
+            assert.equals(0, db.factionrealm.firstToLevel[0][10].classIndex)
+
+            tracker:OnFTLSyncResult({
+                [0] = {[10] = {name = "Racer", classIndex = DRUIDIDX, dingedAt = time}},
+            })
+
+            assert.equals(DRUIDIDX, db.factionrealm.firstToLevel[0][10].classIndex)
+        end)
+
+        it("OnFTLSyncResult ignores records that don't fit the wire format", function()
+            tracker:OnFTLSyncResult({
+                [0] = {
+                    [1] = {name = "Fresh", classIndex = DRUIDIDX, dingedAt = time},
+                    [100] = {name = "Impossible", classIndex = DRUIDIDX, dingedAt = time},
+                    [10] = {name = "Racer", classIndex = DRUIDIDX, dingedAt = time},
+                },
+            })
+
+            assert.is_nil(db.factionrealm.firstToLevel[0][1])
+            assert.is_nil(db.factionrealm.firstToLevel[0][100])
+            assert.equals("Racer", db.factionrealm.firstToLevel[0][10].name)
         end)
     end)
 end)

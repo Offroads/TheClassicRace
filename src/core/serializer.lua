@@ -97,7 +97,10 @@ function TheClassicRaceSerializer.SerializeFTLBatch(firstToLevel)
     local entries = {}
     for classFilter, levels in pairs(firstToLevel) do
         for level, record in pairs(levels) do
-            if record.dingedAt ~= nil then
+            -- only entries that fit the 2-digit wire format; level 1 is not a ding
+            if record.dingedAt ~= nil
+                    and level >= 2 and level <= 99
+                    and classFilter >= 0 and classFilter <= 99 then
                 entries[#entries + 1] = {
                     classFilter = classFilter,
                     level = level,
@@ -153,15 +156,18 @@ function TheClassicRaceSerializer.DeserializeFTLBatch(str)
             local classIndex = tonumber(ci)
             local dingedAt = tonumber(delta) + offset
 
-            if ftldb[classFilter] == nil then ftldb[classFilter] = {} end
-            local existing = ftldb[classFilter][level]
-            if existing == nil or dingedAt < existing.dingedAt
-                    or (dingedAt == existing.dingedAt and name < existing.name) then
-                ftldb[classFilter][level] = {
-                    name = name,
-                    classIndex = classIndex,
-                    dingedAt = dingedAt,
-                }
+            -- level 1 is not a ding — ignore malformed remote entries
+            if level >= 2 then
+                if ftldb[classFilter] == nil then ftldb[classFilter] = {} end
+                local existing = ftldb[classFilter][level]
+                if existing == nil or dingedAt < existing.dingedAt
+                        or (dingedAt == existing.dingedAt and name < existing.name) then
+                    ftldb[classFilter][level] = {
+                        name = name,
+                        classIndex = classIndex,
+                        dingedAt = dingedAt,
+                    }
+                end
             end
         end
     end

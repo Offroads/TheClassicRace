@@ -40,7 +40,7 @@ local TheClassicRaceDefaultDB = {
         -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
         playerHistory = {},
         -- firstToLevel[classFilter][level] = {name, classIndex, dingedAt}
-        -- classFilter 0 = overall, 1-11 = per class
+        -- classFilter 0 = overall, 1-12 = per class (see Config.ClassIndexes)
         firstToLevel = {},
         pioneersMigrated = false,
     },
