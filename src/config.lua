@@ -128,6 +128,8 @@ local TheClassicRaceConfig = {
     BuddySyncInterval = 600,   -- buddy ping every 10 minutes
     BuddyPingBatchSize = 50,   -- max buddies to ping per cycle (random sample if more)
 
+    DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
+
     Network = {
         Prefix = "TCRace",
         Events = {
@@ -142,13 +144,14 @@ local TheClassicRaceConfig = {
             GuildOffer = "GUILDOFFR",
             BuddyPing = "BPING",
             BuddyPong = "BPONG",
+            FTLSync = "FTLSYNC",
         },
     },
     Events = {
         NetworkReady = "NETWORK_READY",
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
-        BumpScan = "BUMP_SCAN",
+        FTLSyncResult = "FTL_SYNC_RESULT",
         Ding = "DING",
         -- ScanFinished(endofrace)
         -- should use RaceFinished though if interested in when the race is finished,
@@ -156,6 +159,8 @@ local TheClassicRaceConfig = {
         ScanFinished = "SCAN_FINISHED",
         RaceFinished = "RACE_FINISHED",
         RefreshGUI = "REFRESH_GUI",
+        MsgStats = "MSG_STATS",
+        BuddyUpdate = "BUDDY_UPDATE",
     },
 }
 TheClassicRace.Config = TheClassicRaceConfig

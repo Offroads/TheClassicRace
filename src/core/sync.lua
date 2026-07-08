@@ -17,6 +17,32 @@ local function computeFullHash(db, config)
     return hash
 end
 
+-- djb2 hash over all firstToLevel records in deterministic order.
+-- Covers every classFilter the serializer transmits (0 = overall, 1..#Classes)
+-- and the full 2-digit level range of the wire format; fields are ':'-separated
+-- so different records can't concatenate to the same entry string.
+local function computeFTLHash(db, config)
+    local hash = 5381
+    local ftl = db.factionrealm.firstToLevel
+    if not ftl then return hash end
+    for classFilter = 0, #config.Classes do
+        local levels = ftl[classFilter]
+        if levels then
+            for level = 2, 99 do
+                local record = levels[level]
+                if record then
+                    local entry = classFilter .. ":" .. level .. ":" .. record.name .. ":"
+                            .. (record.classIndex or 0) .. ":" .. math.floor(record.dingedAt or 0)
+                    for i = 1, #entry do
+                        hash = ((hash * 33) + string.byte(entry, i)) % 2147483647
+                    end
+                end
+            end
+        end
+    end
+    return hash
+end
+
 --[[
 TheClassicRaceSync handles both requesting a sync when we login and responding to others who are request a sync
 ]]--
@@ -33,6 +59,10 @@ setmetatable(TheClassicRaceSync, {
         return cls.new(...)
     end,
 })
+
+-- exposed as statics for tests and diagnostics
+TheClassicRaceSync.ComputeFTLHash = computeFTLHash
+TheClassicRaceSync.ComputeFullHash = computeFullHash
 
 function TheClassicRaceSync.new(Config, Core, DB, EventBus, Network)
     local self = setmetatable({}, TheClassicRaceSync)
@@ -59,6 +89,7 @@ function TheClassicRaceSync.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Network.Events.GuildOffer, self, self.OnNetGuildOffer)
     EventBus:RegisterCallback(self.Config.Network.Events.BuddyPing, self, self.OnNetBuddyPing)
     EventBus:RegisterCallback(self.Config.Network.Events.BuddyPong, self, self.OnNetBuddyPong)
+    EventBus:RegisterCallback(self.Config.Network.Events.FTLSync, self, self.OnNetFTLSync)
 
     return self
 end
@@ -73,11 +104,12 @@ function TheClassicRaceSync:InitSync()
         return
     end
 
-    -- include our leaderboard hashes so partners can skip offering when already in sync
+    -- include our leaderboard and FTL hashes so partners can skip offering when already in sync
     local globalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
     local classHash = TheClassicRace.Leaderboard.ComputeHash(
             self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
-    local payload = {self.classIndex, globalHash, classHash}
+    local ftlHash = computeFTLHash(self.DB, self.Config)
+    local payload = {self.classIndex, globalHash, classHash, ftlHash}
 
     self.Network:SendObject(self.Config.Network.Events.RequestSync, payload, "YELL")
 
@@ -102,9 +134,10 @@ function TheClassicRaceSync:OnNetRequestSync(payload, sender)
     end
 
     -- extract requester's classIndex and hashes (payload is a table in new clients, plain number in old)
-    local requesterClassIndex, requesterGlobalHash, requesterClassHash
+    local requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash
     if type(payload) == "table" then
-        requesterClassIndex, requesterGlobalHash, requesterClassHash = payload[1], payload[2], payload[3]
+        requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash =
+                payload[1], payload[2], payload[3], payload[4]
     else
         requesterClassIndex = payload
     end
@@ -113,9 +146,11 @@ function TheClassicRaceSync:OnNetRequestSync(payload, sender)
     local myGlobalHash = TheClassicRace.Leaderboard.ComputeHash(self.DB.factionrealm.leaderboard[0])
     local myClassHash = TheClassicRace.Leaderboard.ComputeHash(
             self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
 
     -- skip offering if the requester already has identical data to us
-    if requesterGlobalHash ~= nil and requesterGlobalHash == myGlobalHash then
+    if requesterGlobalHash ~= nil and requesterGlobalHash == myGlobalHash
+            and (requesterFTLHash == nil or requesterFTLHash == myFTLHash) then
         local classSyncNeeded = requesterClassIndex == self.classIndex
                 and requesterClassHash ~= nil
                 and requesterClassHash ~= myClassHash
@@ -126,15 +161,15 @@ function TheClassicRaceSync:OnNetRequestSync(payload, sender)
     end
 
     self.Network:SendObject(self.Config.Network.Events.OfferSync,
-            { self.classIndex, self.lastSync, myGlobalHash, myClassHash }, "WHISPER", sender)
+            { self.classIndex, self.lastSync, myGlobalHash, myClassHash, myFTLHash }, "WHISPER", sender)
 end
 
 function TheClassicRaceSync:OnNetOfferSync(offer, sender)
-    local classIndex, lastSync, globalHash, classHash = offer[1], offer[2], offer[3], offer[4]
+    local classIndex, lastSync, globalHash, classHash, ftlHash = offer[1], offer[2], offer[3], offer[4], offer[5]
     TheClassicRace:DebugPrint("OnNetOfferSync(" .. sender .. ")")
     -- add anyone who offers to sync with us
     table.insert(self.offers, {name = sender, classIndex = classIndex, lastSync = lastSync,
-                               globalHash = globalHash, classHash = classHash})
+                               globalHash = globalHash, classHash = classHash, ftlHash = ftlHash})
     self:AddBuddy(sender)
 end
 
@@ -211,20 +246,22 @@ function TheClassicRaceSync:DoSync()
     local sameClass = self.syncPartner.classIndex == self.classIndex
     local myClassHash = sameClass and TheClassicRace.Leaderboard.ComputeHash(
             self.DB.factionrealm.leaderboard[self.classIndex] or {players = {}})
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
 
     local globalMatch = self.syncPartner.globalHash ~= nil and self.syncPartner.globalHash == myGlobalHash
     local classMatch = not sameClass
             or (self.syncPartner.classHash ~= nil and self.syncPartner.classHash == myClassHash)
+    local ftlMatch = self.syncPartner.ftlHash ~= nil and self.syncPartner.ftlHash == myFTLHash
 
-    if globalMatch and classMatch then
+    if globalMatch and classMatch and ftlMatch then
         TheClassicRace:DebugPrint("Already in sync with " .. self.syncPartner.name)
         self:SetReady()
         return
     end
 
-    -- include our hashes so the partner can also skip sending back leaderboards we already agree on
+    -- include our hashes so the partner can also skip sending back data we already agree on
     self.Network:SendObject(self.Config.Network.Events.StartSync,
-            {self.classIndex, myGlobalHash, myClassHash}, "WHISPER", self.syncPartner.name)
+            {self.classIndex, myGlobalHash, myClassHash, myFTLHash}, "WHISPER", self.syncPartner.name)
 
     -- check if we need to retry syncing after a short timeout
     local _self = self
@@ -234,12 +271,15 @@ function TheClassicRaceSync:DoSync()
         end
     end)
 
-    -- only send leaderboards that the partner doesn't already have
+    -- only send leaderboards / FTL data the partner doesn't already have
     if not globalMatch then
         self:Sync(self.syncPartner.name, 0)
     end
     if sameClass and not classMatch then
         self:Sync(self.syncPartner.name, self.classIndex)
+    end
+    if not ftlMatch then
+        self:SyncFTL(self.syncPartner.name)
     end
 end
 
@@ -250,10 +290,11 @@ function TheClassicRaceSync:Sync(syncTo, classIndex)
 end
 
 function TheClassicRaceSync:OnNetStartSync(payload, sender)
+    if not self.DB.profile.options.networking then return end
     TheClassicRace:DebugPrint("OnNetStartSync(" .. sender .. ")")
     self.lastSync = self.Core:Now()
 
-    local requesterClassIndex, requesterGlobalHash, requesterClassHash
+    local requesterClassIndex, requesterGlobalHash, requesterClassHash, requesterFTLHash
     if type(payload) == "table" then
         requesterClassIndex = payload[1]
 
@@ -269,11 +310,17 @@ function TheClassicRaceSync:OnNetStartSync(payload, sender)
                     end
                 end
             end
+            -- payload[3] is the requester's FTL hash; only send FTL when it differs
+            -- (older clients don't include it — send unconditionally for those)
+            local guildFTLHash = payload[3]
+            if guildFTLHash == nil or guildFTLHash ~= computeFTLHash(self.DB, self.Config) then
+                self:SyncFTL(sender)
+            end
             return
         end
 
-        -- zone sync: payload[2] is globalHash, payload[3] is classHash
-        requesterGlobalHash, requesterClassHash = payload[2], payload[3]
+        -- zone sync: payload[2] is globalHash, payload[3] is classHash, payload[4] is ftlHash
+        requesterGlobalHash, requesterClassHash, requesterFTLHash = payload[2], payload[3], payload[4]
     else
         requesterClassIndex = payload
     end
@@ -291,9 +338,15 @@ function TheClassicRaceSync:OnNetStartSync(payload, sender)
             self:Sync(sender, self.classIndex)
         end
     end
+
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    if requesterFTLHash == nil or requesterFTLHash ~= myFTLHash then
+        self:SyncFTL(sender)
+    end
 end
 
 function TheClassicRaceSync:OnNetSyncPayload(payload, sender)
+    if not self.DB.profile.options.networking then return end
     TheClassicRace:DebugPrint("OnNetSyncPayload(" .. sender .. ")")
 
     local batch = TheClassicRace.Serializer.DeserializePlayerInfoBatch(payload)
@@ -328,8 +381,9 @@ function TheClassicRaceSync:SendGuildSync()
     self.guildOffers = {}
 
     local fullHash = computeFullHash(self.DB, self.Config)
+    local ftlHash = computeFTLHash(self.DB, self.Config)
     self.Network:SendObject(self.Config.Network.Events.GuildSync,
-            {self.classIndex, fullHash, self.Core:LoginTime()}, "GUILD")
+            {self.classIndex, fullHash, self.Core:LoginTime(), ftlHash}, "GUILD")
 
     local _self = self
     C_Timer.After(self.Config.GuildSyncWait + 1, function()
@@ -343,10 +397,13 @@ function TheClassicRaceSync:OnNetGuildSync(payload, sender)
     if not self.DB.profile.options.networking then return end
     if not self.isReady then return end
 
-    local _, requesterFullHash, _ = payload[1], payload[2], payload[3]
+    local requesterFullHash, requesterFTLHash = payload[2], payload[4]
 
     local myFullHash = computeFullHash(self.DB, self.Config)
-    if myFullHash == requesterFullHash then return end
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    -- older clients don't announce an FTL hash; treat that as matching
+    local ftlDiffers = requesterFTLHash ~= nil and requesterFTLHash ~= myFTLHash
+    if myFullHash == requesterFullHash and not ftlDiffers then return end
 
     local delay = math.random(0, self.Config.GuildSyncWait)
     local _self = self
@@ -355,7 +412,8 @@ function TheClassicRaceSync:OnNetGuildSync(payload, sender)
         local myClassHash = TheClassicRace.Leaderboard.ComputeHash(
                 _self.DB.factionrealm.leaderboard[_self.classIndex] or {players = {}})
         _self.Network:SendObject(_self.Config.Network.Events.GuildOffer,
-                {_self.classIndex, _self.lastSync, myFullHash, myGlobalHash, myClassHash, _self.Core:LoginTime()},
+                {_self.classIndex, _self.lastSync, myFullHash, myGlobalHash, myClassHash, _self.Core:LoginTime(),
+                 computeFTLHash(_self.DB, _self.Config)},
                 "WHISPER", sender)
     end)
 end
@@ -363,24 +421,34 @@ end
 -- Collect guild offers during the open window.
 function TheClassicRaceSync:OnNetGuildOffer(offer, sender)
     if self.guildOffers == nil then return end
-    local classIndex, lastSync, fullHash, globalHash, classHash, loginTime =
-            offer[1], offer[2], offer[3], offer[4], offer[5], offer[6]
+    local classIndex, lastSync, fullHash, globalHash, classHash, loginTime, ftlHash =
+            offer[1], offer[2], offer[3], offer[4], offer[5], offer[6], offer[7]
     TheClassicRace:DebugPrint("GuildOffer from " .. sender)
     table.insert(self.guildOffers, {
         name = sender, classIndex = classIndex, lastSync = lastSync,
         fullHash = fullHash, globalHash = globalHash, classHash = classHash, loginTime = loginTime,
+        ftlHash = ftlHash,
     })
 end
 
 -- Add or update a buddy entry in the persistent DB list.
 function TheClassicRaceSync:AddBuddy(name)
-    if name == self.Core:FullRealMe() then return end
+    -- sender format differs per channel (YELL gives "Name", GUILD/WHISPER give
+    -- "Name-Realm") — normalize same-realm names so we don't store duplicates
+    local shortName, realm = self.Core:SplitFullPlayer(name)
+    if self.Core:IsMyRealm(realm) then
+        if shortName == self.Core:RealMe() then return end
+        name = shortName
+    elseif name == self.Core:FullRealMe() then
+        return
+    end
     local buddies = self.DB.factionrealm.buddies
     if not buddies[name] then
         buddies[name] = {}
     end
     buddies[name].lastSeen = self.Core:Now()
     TheClassicRace:DebugPrint("Buddy: added/updated " .. name)
+    self.EventBus:PublishEvent(self.Config.Events.BuddyUpdate)
 end
 
 -- Send BPING to up to BuddyPingBatchSize buddies (random sample if more).
@@ -412,7 +480,8 @@ function TheClassicRaceSync:SendBuddyPings()
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
-    local payload = {myFullHash, myPerClassHashes}
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    local payload = {myFullHash, myPerClassHashes, myFTLHash}
 
     TheClassicRace:DebugPrint("BuddyPing: pinging " .. #selected .. " of " .. #names .. " buddies")
     for _, name in ipairs(selected) do
@@ -432,31 +501,50 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
 
     -- always ack with our hashes so the sender knows we're online and can push back
     self.Network:SendObject(self.Config.Network.Events.BuddyPong,
-            {myFullHash, myPerClassHashes}, "WHISPER", sender)
+            {myFullHash, myPerClassHashes, myFTLHash}, "WHISPER", sender)
 
     if not self.isReady then return end
 
     local senderFullHash = payload[1]
-    if myFullHash == senderFullHash then return end
+    local senderFTLHash = payload[3]
 
-    local senderPerClassHashes = payload[2]
-    for classIndex = 0, #self.Config.Classes do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
-        if lb and #lb.players > 0 then
-            local myHash = myPerClassHashes[classIndex + 1]
-            local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
-            if myHash ~= theirHash then
-                self:Sync(sender, classIndex)
+    local leaderboardsDiffer = myFullHash ~= senderFullHash
+    local ftlDiffers = senderFTLHash == nil or senderFTLHash ~= myFTLHash
+
+    if not leaderboardsDiffer and not ftlDiffers then return end
+
+    local diffClasses = {}
+    if leaderboardsDiffer then
+        local senderPerClassHashes = payload[2]
+        for classIndex = 0, #self.Config.Classes do
+            local lb = self.DB.factionrealm.leaderboard[classIndex]
+            if lb and #lb.players > 0 then
+                local myHash = myPerClassHashes[classIndex + 1]
+                local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
+                if myHash ~= theirHash then
+                    diffClasses[#diffClasses + 1] = classIndex
+                    self:Sync(sender, classIndex)
+                end
             end
         end
     end
+
+    if ftlDiffers then
+        self:SyncFTL(sender)
+    end
+
+    if leaderboardsDiffer or ftlDiffers then
+        TheClassicRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
+    end
 end
 
--- Received BPONG from a buddy: update their last-seen, push any leaderboards they're missing.
+-- Received BPONG from a buddy: update their last-seen, push any leaderboards / FTL they're missing.
 function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
+    if not self.DB.profile.options.networking then return end
     self:AddBuddy(sender)
     TheClassicRace:DebugPrint("BuddyPong from " .. sender)
 
@@ -466,19 +554,64 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
     if not senderFullHash then return end
 
     local myFullHash = computeFullHash(self.DB, self.Config)
-    if myFullHash == senderFullHash then return end
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    local senderFTLHash = payload[3]
 
-    local senderPerClassHashes = payload[2]
-    for classIndex = 0, #self.Config.Classes do
-        local lb = self.DB.factionrealm.leaderboard[classIndex]
-        if lb and #lb.players > 0 then
-            local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
-            local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
-            if myHash ~= theirHash then
-                self:Sync(sender, classIndex)
+    local leaderboardsDiffer = myFullHash ~= senderFullHash
+    local ftlDiffers = senderFTLHash == nil or senderFTLHash ~= myFTLHash
+
+    local diffClasses = {}
+    if leaderboardsDiffer then
+        local senderPerClassHashes = payload[2]
+        for classIndex = 0, #self.Config.Classes do
+            local lb = self.DB.factionrealm.leaderboard[classIndex]
+            if lb and #lb.players > 0 then
+                local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
+                local theirHash = senderPerClassHashes and senderPerClassHashes[classIndex + 1] or 0
+                if myHash ~= theirHash then
+                    diffClasses[#diffClasses + 1] = classIndex
+                    self:Sync(sender, classIndex)
+                end
             end
         end
     end
+
+    if ftlDiffers then
+        self:SyncFTL(sender)
+    end
+
+    if leaderboardsDiffer or ftlDiffers then
+        TheClassicRace:AddHashLog(sender, ">", diffClasses, ftlDiffers)
+    end
+end
+
+-- Whispers our complete firstToLevel dataset to the target player.
+-- Payload is a table {ftlBatchString, realmOpenedAt} so both are synced together.
+function TheClassicRaceSync:SyncFTL(syncTo)
+    local ftlstr = TheClassicRace.Serializer.SerializeFTLBatch(self.DB.factionrealm.firstToLevel or {})
+    local payload = {ftlstr, self.DB.factionrealm.realmOpenedAt}
+    self.Network:SendObject(self.Config.Network.Events.FTLSync, payload, "WHISPER", syncTo)
+end
+
+-- Received a firstToLevel sync payload — deserialize and forward to tracker for merging.
+-- Accepts both the new table format {ftlstr, realmOpenedAt} and the old bare-string format.
+function TheClassicRaceSync:OnNetFTLSync(payload, sender)
+    if not self.DB.profile.options.networking then return end
+    TheClassicRace:DebugPrint("OnNetFTLSync(" .. sender .. ")")
+    local ftlstr, remoteRealmOpenedAt
+    if type(payload) == "table" then
+        ftlstr = payload[1]
+        remoteRealmOpenedAt = payload[2]
+    else
+        ftlstr = payload
+    end
+    local ftldb = TheClassicRace.Serializer.DeserializeFTLBatch(ftlstr or "")
+    self.EventBus:PublishEvent(self.Config.Events.FTLSyncResult, ftldb, remoteRealmOpenedAt)
+
+    -- an FTL payload also completes our initial sync: when only FTL differed from
+    -- our partner this is the only payload we'll receive, and without marking
+    -- ready we'd keep retrying other partners until the offer list runs dry
+    self:SetReady()
 end
 
 -- Called when the party roster changes. Debounced to avoid firing multiple times
@@ -510,7 +643,8 @@ function TheClassicRaceSync:SendGroupSync()
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
-    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes}, "GROUP")
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    self.Network:SendObject(self.Config.Network.Events.BuddyPing, {myFullHash, myPerClassHashes, myFTLHash}, "GROUP")
 end
 
 -- Start the periodic buddy ping ticker.
@@ -543,8 +677,11 @@ function TheClassicRaceSync:DoGuildSync()
 
     TheClassicRace:DebugPrint("DoGuildSync with " .. best.name)
 
-    -- sanity check: if full hashes match now, nothing to do
-    if best.fullHash == computeFullHash(self.DB, self.Config) then
+    -- sanity check: if full hashes (and FTL, when the partner announced one) match
+    -- now, nothing to do
+    local myFTLHash = computeFTLHash(self.DB, self.Config)
+    local ftlDiffers = best.ftlHash ~= nil and best.ftlHash ~= myFTLHash
+    if best.fullHash == computeFullHash(self.DB, self.Config) and not ftlDiffers then
         TheClassicRace:DebugPrint("Already in sync with guild partner " .. best.name)
         return
     end
@@ -557,6 +694,6 @@ function TheClassicRaceSync:DoGuildSync()
     end
 
     self.Network:SendObject(self.Config.Network.Events.StartSync,
-            {self.classIndex, myPerClassHashes}, "WHISPER", best.name)
+            {self.classIndex, myPerClassHashes, myFTLHash}, "WHISPER", best.name)
 end
 

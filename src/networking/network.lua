@@ -63,6 +63,14 @@ function TheClassicRaceNetwork:Init()
     self.EventBus:PublishEvent(TheClassicRace.Config.Events.NetworkReady)
 end
 
+function TheClassicRaceNetwork:TrackMessage(direction, event)
+    if not TheClassicRace.DB or not TheClassicRace.DB.profile.options.debug then return end
+    local stats = TheClassicRace.MsgStats
+    if not stats then return end
+    stats[direction][event] = (stats[direction][event] or 0) + 1
+    self.EventBus:PublishEvent(TheClassicRace.Config.Events.MsgStats)
+end
+
 function TheClassicRaceNetwork:HandleAddonMessage(...)
     local prefix, message, _, sender = ...
 
@@ -106,6 +114,7 @@ function TheClassicRaceNetwork:HandleAddonMessage(...)
         TheClassicRace:DebugPrint("Recv " .. event .. " <- " .. sender)
         debugLogPayload(event, payload)
 
+        self:TrackMessage("recv", event)
         self.EventBus:PublishEvent(event, payload, sender)
     end)
 
@@ -127,6 +136,7 @@ function TheClassicRaceNetwork:SendObject(event, object, channel, target, prio)
             " Size: " .. string.len(encoded) .. " / " .. string.len(payload))
     TheClassicRace:DebugPrint("Send " .. event .. " -> " .. channel)
     debugLogPayload(event, object)
+    self:TrackMessage("send", event)
 
     if channel == "GROUP" then
         if IsInRaid() then

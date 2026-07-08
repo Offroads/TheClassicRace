@@ -12,11 +12,7 @@ function TheClassicRace:slashtcr(input)
 
     --[[SCAN]]--
     if action == "scan" then
-        self.scanner:StartScan()
-
-    --[[CLASS SYNC]]--
-    elseif action == "classscan" then
-        self.classScanner:StartScan()
+        self.scanner:TriggerScan()
 
     --[[RESET]]--
     elseif action == "reset" then

@@ -98,15 +98,22 @@ function TheClassicRace:RegisterOptions()
                         set = function(_, val) _self.DB.profile.options.networking = val end,
                         get = function() return _self.DB.profile.options.networking end,
                     },
-                    dontBumpScan = {
-                        order = 32,
-                        name = "Always /who query",
-                        desc = "Do a /who scan every 60s even when data was synced from another player",
+                    debugMode = {
+                        order = 33,
+                        name = "Debug Mode",
+                        desc = "Print debug output to chat and show the TCR Buddies window",
                         descStyle = "inline",
                         width = "full",
                         type = "toggle",
-                        set = function(_, val) _self.DB.profile.options.dontbump = val end,
-                        get = function() return _self.DB.profile.options.dontbump end,
+                        set = function(_, val)
+                            _self.DB.profile.options.debug = val
+                            if val then
+                                _self.DebugFrame:Show()
+                            else
+                                _self.DebugFrame:Hide()
+                            end
+                        end,
+                        get = function() return _self.DB.profile.options.debug end,
                     },
                     reset = {
                         order = 50,

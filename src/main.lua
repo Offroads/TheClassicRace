@@ -26,6 +26,8 @@ local LibStub = _G.LibStub
 ---       handles syncing when coming online
 ---@field StatusFrame   TheClassicRaceStatusFrame
 ---       GUI element to display the leaderboard
+---@field PioneersView  TheClassicRacePioneersView
+---       renders the Pioneers (first-to-level) tab inside the status frame
 ---@field DefaultDB     TheClassicRaceDefaultDB
 TheClassicRace = LibStub("AceAddon-3.0"):NewAddon("TheClassicRace", "AceConsole-3.0")
 
@@ -47,9 +49,13 @@ function TheClassicRace:OnInitialize()
     self.Sync = TheClassicRace.Sync(self.Config, self.Core, self.DB, self.EventBus, self.Network)
     self.updater = TheClassicRace.Updater(self.Core, self.EventBus)
     self.StatusFrame = TheClassicRace.StatusFrame(self.Config, self.Core, self.DB, self.EventBus)
-    self.DebugFrame = TheClassicRace.DebugFrame(self.Config, self.Core, self.DB)
+    self.DebugFrame = TheClassicRace.DebugFrame(self.Config, self.Core, self.DB, self.EventBus)
 
     self.scanner = TheClassicRace.Scanner(self.Core, self.DB, self.EventBus)
+
+    -- message stats counters and hash mismatch log (only populated when debug mode is on)
+    TheClassicRace.MsgStats = { send = {}, recv = {} }
+    TheClassicRace.HashLog = {}
 
     self:DBMigrations()
 
@@ -88,18 +94,52 @@ function TheClassicRace:OnEnable()
     if self.DB.profile.gui.display then
         self.StatusFrame:Show()
     end
+
+    if self.DB.profile.options.debug then
+        self.DebugFrame:Show()
+    end
 end
 
 function TheClassicRace:DBMigrations()
     -- fresh DB or pre-versioning DB, reset and init ...
     if self.DB.factionrealm.dbversion == "0.0.0" then
         self:ResetDB()
+        -- Record server time as realm-opened reference on first ever login.
+        -- GetServerTime() is server-synced (UTC), not affected by client timezone.
+        self.DB.factionrealm.realmOpenedAt = GetServerTime()
+        return
+    end
+    -- one-time migration: seed pioneer data from existing leaderboard entries
+    if not self.DB.factionrealm.pioneersMigrated then
+        self:MigratePioneerData()
+        self.DB.factionrealm.pioneersMigrated = true
+    end
+end
+
+-- Populates firstToLevel and playerHistory from whatever leaderboard data already exists.
+-- Only runs once per DB (on first load after the pioneers feature is introduced).
+function TheClassicRace:MigratePioneerData()
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb and #lb.players > 0 then
+            for _, player in ipairs(lb.players) do
+                if player.dingedAt then
+                    self.Tracker:UpdatePioneers(player)
+                    self.Tracker:UpdatePlayerHistory(player)
+                end
+            end
+        end
     end
 end
 
 function TheClassicRace:ResetDB()
+    -- Preserve realmOpenedAt so a manual data reset doesn't lose the realm launch timestamp.
+    local realmOpenedAt = self.DB.factionrealm.realmOpenedAt
     self.DB:ResetDB()
     self.DB.factionrealm.dbversion = self.Config.Version
+    if realmOpenedAt then
+        self.DB.factionrealm.realmOpenedAt = realmOpenedAt
+    end
     if self.Tracker then
         self.Tracker:ReinitLeaderboards()
     end
