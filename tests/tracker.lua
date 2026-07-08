@@ -424,6 +424,135 @@ describe("Tracker", function()
             assert.equals(DRUIDIDX, db.factionrealm.firstToLevel[0][10].classIndex)
         end)
 
+        it("OnPHSyncResult merges new players into playerHistory", function()
+            tracker:OnPHSyncResult({
+                Racer = {classIndex = WARRIORIDX, levels = {[10] = time - 100, [11] = time}},
+            })
+
+            local hist = db.factionrealm.playerHistory["Racer"]
+            assert.equals(WARRIORIDX, hist.classIndex)
+            assert.equals(time - 100, hist.levels[10])
+            assert.equals(time, hist.levels[11])
+        end)
+
+        it("OnPHSyncResult keeps the earliest dingedAt per level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Racer", 10, DRUIDIDX, time - 100))
+
+            tracker:OnPHSyncResult({
+                Racer = {classIndex = DRUIDIDX, levels = {[10] = time, [11] = time + 50}},
+            })
+
+            local hist = db.factionrealm.playerHistory["Racer"]
+            -- local level-10 record was earlier, remote level-11 record is new
+            assert.equals(time - 100, hist.levels[10])
+            assert.equals(time + 50, hist.levels[11])
+        end)
+
+        it("OnPHSyncResult fills in a missing classIndex", function()
+            tracker:ProcessPlayerInfo({name = "Racer", level = 10, classIndex = 0, dingedAt = time})
+            assert.equals(0, db.factionrealm.playerHistory["Racer"].classIndex)
+
+            tracker:OnPHSyncResult({
+                Racer = {classIndex = DRUIDIDX, levels = {[10] = time}},
+            })
+
+            assert.equals(DRUIDIDX, db.factionrealm.playerHistory["Racer"].classIndex)
+        end)
+
+        it("OnPHSyncResult ignores levels that don't fit the wire format", function()
+            tracker:OnPHSyncResult({
+                Racer = {classIndex = DRUIDIDX, levels = {[1] = time, [100] = time, [10] = time}},
+            })
+
+            local hist = db.factionrealm.playerHistory["Racer"]
+            assert.is_nil(hist.levels[1])
+            assert.is_nil(hist.levels[100])
+            assert.equals(time, hist.levels[10])
+        end)
+
+        it("PrunePlayerHistory keeps everyone while the race is still live", function()
+            db.factionrealm.leaderboard[0].players = {
+                {name = "OnBoard", level = 30, dingedAt = time, classIndex = DRUIDIDX},
+            }
+            db.factionrealm.playerHistory = {
+                OnBoard = {classIndex = DRUIDIDX, levels = {[30] = time}},
+                Rando = {classIndex = WARRIORIDX, levels = {[10] = time}},
+            }
+
+            -- constructing a tracker runs NormalizeDB, which prunes
+            TheClassicRace.Tracker(config, core, db, TheClassicRace.EventBus(), network)
+
+            -- no leaderboard is final yet: Rando may still enter the race
+            assert.is_table(db.factionrealm.playerHistory["OnBoard"])
+            assert.is_table(db.factionrealm.playerHistory["Rando"])
+        end)
+
+        it("PrunePlayerHistory drops non-members once their class leaderboard is final", function()
+            local players = {}
+            for i = 1, config.MaxLeaderboardSize do
+                players[i] = {name = "Warrior" .. i, level = config.MaxLevel, dingedAt = time + i,
+                              classIndex = WARRIORIDX}
+            end
+            db.factionrealm.leaderboard[WARRIORIDX].players = players
+            db.factionrealm.leaderboard[WARRIORIDX].minLevel = config.MaxLevel
+
+            db.factionrealm.playerHistory = {
+                Warrior1 = {classIndex = WARRIORIDX, levels = {[config.MaxLevel] = time}},
+                Rando = {classIndex = WARRIORIDX, levels = {[10] = time}},
+                Druid = {classIndex = DRUIDIDX, levels = {[10] = time}},
+                Unknown = {classIndex = 0, levels = {[10] = time}},
+                -- ourselves, same class as the final board but never pruned
+                Nub = {classIndex = WARRIORIDX, levels = {[5] = time}},
+            }
+
+            TheClassicRace.Tracker(config, core, db, TheClassicRace.EventBus(), network)
+
+            -- warriors not on the final warrior board are out of that race
+            assert.is_nil(db.factionrealm.playerHistory["Rando"])
+            -- board members, other classes (their boards are still live), unknown-class
+            -- players (global board still live) and ourselves are all kept
+            assert.is_table(db.factionrealm.playerHistory["Warrior1"])
+            assert.is_table(db.factionrealm.playerHistory["Druid"])
+            assert.is_table(db.factionrealm.playerHistory["Unknown"])
+            assert.is_table(db.factionrealm.playerHistory["Nub"])
+        end)
+
+        it("PrunePlayerHistory drops unknown-class non-members once the global leaderboard is final", function()
+            local players = {}
+            for i = 1, config.MaxLeaderboardSize do
+                players[i] = {name = "Racer" .. i, level = config.MaxLevel, dingedAt = time + i,
+                              classIndex = DRUIDIDX}
+            end
+            db.factionrealm.leaderboard[0].players = players
+            db.factionrealm.leaderboard[0].minLevel = config.MaxLevel
+
+            db.factionrealm.playerHistory = {
+                Unknown = {classIndex = 0, levels = {[10] = time}},
+            }
+
+            TheClassicRace.Tracker(config, core, db, TheClassicRace.EventBus(), network)
+
+            assert.is_nil(db.factionrealm.playerHistory["Unknown"])
+        end)
+
+        it("PrunePlayerHistory drops all non-members when the race is finished", function()
+            db.factionrealm.finished = true
+            db.factionrealm.leaderboard[0].players = {
+                {name = "OnBoard", level = 30, dingedAt = time, classIndex = DRUIDIDX},
+            }
+            db.factionrealm.playerHistory = {
+                OnBoard = {classIndex = DRUIDIDX, levels = {[30] = time}},
+                Rando = {classIndex = WARRIORIDX, levels = {[10] = time}},
+                Nub = {classIndex = DRUIDIDX, levels = {[5] = time}},
+            }
+
+            TheClassicRace.Tracker(config, core, db, TheClassicRace.EventBus(), network)
+
+            assert.is_nil(db.factionrealm.playerHistory["Rando"])
+            assert.is_table(db.factionrealm.playerHistory["OnBoard"])
+            assert.is_table(db.factionrealm.playerHistory["Nub"])
+        end)
+
         it("OnFTLSyncResult ignores records that don't fit the wire format", function()
             tracker:OnFTLSyncResult({
                 [0] = {

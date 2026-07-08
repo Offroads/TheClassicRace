@@ -49,6 +49,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
     EventBus:RegisterCallback(self.Config.Events.FTLSyncResult, self, self.OnFTLSyncResult)
+    EventBus:RegisterCallback(self.Config.Events.PHSyncResult, self, self.OnPHSyncResult)
     EventBus:RegisterCallback(self.Config.Events.ScanFinished, self, self.OnScanFinished)
 
     return self
@@ -85,6 +86,57 @@ function TheClassicRaceTracker:NormalizeDB()
                 if record.dingedAt ~= nil then
                     record.dingedAt = math.floor(record.dingedAt)
                 end
+            end
+        end
+    end
+
+    self:PrunePlayerHistory()
+end
+
+-- A leaderboard is final when it's full and its lowest member has reached max
+-- level: from then on, players absent from it can no longer enter the race for it.
+local function isLeaderboardFinal(lb, config)
+    return lb ~= nil and #lb.players >= config.MaxLeaderboardSize and lb.minLevel >= config.MaxLevel
+end
+
+-- playerHistory records every character a scan ever saw and would grow unbounded
+-- (thousands of players on a busy realm). While the race is live everyone is kept —
+-- a player who temporarily drops off a leaderboard may re-enter it and would lose
+-- their history otherwise. Once the leaderboard a player competes on is final
+-- (full at max level), or the race is finished, non-members are dropped.
+-- Our own history is always kept.
+function TheClassicRaceTracker:PrunePlayerHistory()
+    local playerHistory = self.DB.factionrealm.playerHistory
+    if playerHistory == nil then return end
+
+    local keep = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb then
+            for _, player in ipairs(lb.players) do
+                keep[player.name] = true
+            end
+        end
+    end
+    keep[self.Core:Me()] = true
+
+    local raceFinished = self.DB.factionrealm.finished
+    local globalFinal = isLeaderboardFinal(self.DB.factionrealm.leaderboard[0], self.Config)
+
+    for name, hist in pairs(playerHistory) do
+        if not keep[name] then
+            -- players with a known class compete on their class leaderboard;
+            -- unknown-class players are gated on the global leaderboard instead
+            local classIndex = hist ~= nil and hist.classIndex or nil
+            local boardFinal
+            if classIndex ~= nil and classIndex >= 1 and classIndex <= #self.Config.Classes then
+                boardFinal = isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config)
+            else
+                boardFinal = globalFinal
+            end
+
+            if raceFinished or boardFinal then
+                playerHistory[name] = nil
             end
         end
     end
@@ -538,6 +590,37 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     if classIndex ~= nil and classIndex ~= 0 then
         if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
         mergeFTLRecord(db.firstToLevel[classIndex], level, name, classIndex, dingedAt)
+    end
+end
+
+-- Merges a received playerHistory chunk, keeping the earliest dingedAt per
+-- (player, level) and filling in a missing classIndex — deterministic and
+-- monotonic, so repeated exchanges converge instead of ping-ponging.
+-- batch = {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}
+function TheClassicRaceTracker:OnPHSyncResult(batch)
+    local playerHistory = self.DB.factionrealm.playerHistory
+
+    for name, remote in pairs(batch) do
+        if type(remote) == "table" and type(remote.levels) == "table" then
+            if playerHistory[name] == nil then
+                playerHistory[name] = {classIndex = remote.classIndex, levels = {}}
+            end
+            local hist = playerHistory[name]
+
+            if (hist.classIndex == nil or hist.classIndex == 0)
+                    and remote.classIndex ~= nil and remote.classIndex ~= 0 then
+                hist.classIndex = remote.classIndex
+            end
+
+            for level, dingedAt in pairs(remote.levels) do
+                if type(level) == "number" and level >= 2 and level <= 99
+                        and type(dingedAt) == "number" then
+                    if hist.levels[level] == nil or dingedAt < hist.levels[level] then
+                        hist.levels[level] = math.floor(dingedAt)
+                    end
+                end
+            end
+        end
     end
 end
 

@@ -130,6 +130,12 @@ local TheClassicRaceConfig = {
 
     DingPushDelay = 10,        -- seconds to batch dings before pushing to guild + buddies
 
+    -- playerHistory sync: potentially large (hundreds of players x dozens of levels),
+    -- so it's transferred only once per login (pull-only, toward the player who just
+    -- logged in) and chunked to stay friendly to the addon channel throttle
+    PlayerHistoryChunkSize = 20,   -- players per PHSYNC message
+    PlayerHistoryChunkDelay = 2,   -- seconds between PHSYNC messages
+
     Network = {
         Prefix = "TCRace",
         Events = {
@@ -145,6 +151,7 @@ local TheClassicRaceConfig = {
             BuddyPing = "BPING",
             BuddyPong = "BPONG",
             FTLSync = "FTLSYNC",
+            PlayerHistorySync = "PHSYNC",
         },
     },
     Events = {
@@ -152,6 +159,7 @@ local TheClassicRaceConfig = {
         SlashWhoResult = "WHO_RESULT",
         SyncResult = "SYNC_RESULT",
         FTLSyncResult = "FTL_SYNC_RESULT",
+        PHSyncResult = "PH_SYNC_RESULT",
         Ding = "DING",
         -- ScanFinished(endofrace)
         -- should use RaceFinished though if interested in when the race is finished,
