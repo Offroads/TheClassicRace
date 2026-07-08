@@ -168,6 +168,87 @@ describe("Serializer", function()
         end)
     end)
 
+    describe("PlayerHistoryChunks", function()
+        local SerPHChunks = TheClassicRace.Serializer.SerializePlayerHistoryChunks
+        local DeserPHBatch = TheClassicRace.Serializer.DeserializePlayerHistoryBatch
+
+        it("empty history serializes to no chunks", function()
+            assert.same({}, SerPHChunks({}, {}, 20))
+            assert.same({}, DeserPHBatch(""))
+        end)
+
+        it("round-trips player history", function()
+            local t = 1000000000
+            local playerHistory = {
+                Alice = {classIndex = 3, levels = {[15] = t + 100, [16] = t + 200}},
+                Bob = {classIndex = 1, levels = {[10] = t}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Alice", "Bob"}, 20)
+            assert.equals(1, #chunks)
+
+            local result = DeserPHBatch(chunks[1])
+            assert.same(playerHistory, result)
+        end)
+
+        it("splits into chunks of at most chunkSize players, each independently parseable", function()
+            local t = 1000000000
+            local playerHistory = {
+                Alice = {classIndex = 3, levels = {[15] = t + 100}},
+                Bob = {classIndex = 1, levels = {[10] = t}},
+                Carol = {classIndex = 5, levels = {[20] = t + 500}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Alice", "Bob", "Carol"}, 2)
+            assert.equals(2, #chunks)
+
+            -- merging all chunks yields the full data set
+            local merged = {}
+            for _, chunk in ipairs(chunks) do
+                for name, hist in pairs(DeserPHBatch(chunk)) do
+                    merged[name] = hist
+                end
+            end
+            assert.same(playerHistory, merged)
+        end)
+
+        it("skips levels that don't fit the wire format and players without valid levels", function()
+            local t = 1000000000
+            local playerHistory = {
+                Alice = {classIndex = 3, levels = {[1] = t, [15] = t + 100, [100] = t}},
+                Fresh = {classIndex = 1, levels = {[1] = t}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Alice", "Fresh"}, 20)
+            assert.equals(1, #chunks)
+
+            local result = DeserPHBatch(chunks[1])
+            assert.same({Alice = {classIndex = 3, levels = {[15] = t + 100}}}, result)
+        end)
+
+        it("round-trips names containing a dash", function()
+            local t = 1000000000
+            local playerHistory = {
+                ["Nub-Ville"] = {classIndex = 2, levels = {[12] = t}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Nub-Ville"}, 20)
+            local result = DeserPHBatch(chunks[1])
+            assert.same(playerHistory, result)
+        end)
+
+        it("floors fractional timestamps", function()
+            local t = 1000000000
+            local playerHistory = {
+                Alice = {classIndex = 3, levels = {[15] = t + 100.9}},
+            }
+
+            local chunks = SerPHChunks(playerHistory, {"Alice"}, 20)
+            local result = DeserPHBatch(chunks[1])
+            assert.equals(t + 100, result["Alice"].levels[15])
+        end)
+    end)
+
     describe("PlayerInfoBatch", function()
         it("serializes and deserializes", function()
             local nub1 = {name = "Nubone", level = 5, dingedAt = time + 10, classIndex = 11}

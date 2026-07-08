@@ -49,6 +49,7 @@ function TheClassicRaceTracker.new(Config, Core, DB, EventBus, Network)
     EventBus:RegisterCallback(self.Config.Events.SlashWhoResult, self, self.OnSlashWhoResult)
     EventBus:RegisterCallback(self.Config.Events.SyncResult, self, self.OnSyncResult)
     EventBus:RegisterCallback(self.Config.Events.FTLSyncResult, self, self.OnFTLSyncResult)
+    EventBus:RegisterCallback(self.Config.Events.PHSyncResult, self, self.OnPHSyncResult)
     EventBus:RegisterCallback(self.Config.Events.ScanFinished, self, self.OnScanFinished)
 
     return self
@@ -86,6 +87,34 @@ function TheClassicRaceTracker:NormalizeDB()
                     record.dingedAt = math.floor(record.dingedAt)
                 end
             end
+        end
+    end
+
+    self:PrunePlayerHistory()
+end
+
+-- playerHistory records every character a scan ever saw and would grow unbounded
+-- (thousands of players on a busy realm). Only leaderboard members are relevant for
+-- the per-character breakdown and for syncing, so on login everyone else is dropped;
+-- our own history is always kept.
+function TheClassicRaceTracker:PrunePlayerHistory()
+    local playerHistory = self.DB.factionrealm.playerHistory
+    if playerHistory == nil then return end
+
+    local keep = {}
+    for classIndex = 0, #self.Config.Classes do
+        local lb = self.DB.factionrealm.leaderboard[classIndex]
+        if lb then
+            for _, player in ipairs(lb.players) do
+                keep[player.name] = true
+            end
+        end
+    end
+    keep[self.Core:Me()] = true
+
+    for name, _ in pairs(playerHistory) do
+        if not keep[name] then
+            playerHistory[name] = nil
         end
     end
 end
@@ -538,6 +567,37 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     if classIndex ~= nil and classIndex ~= 0 then
         if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
         mergeFTLRecord(db.firstToLevel[classIndex], level, name, classIndex, dingedAt)
+    end
+end
+
+-- Merges a received playerHistory chunk, keeping the earliest dingedAt per
+-- (player, level) and filling in a missing classIndex — deterministic and
+-- monotonic, so repeated exchanges converge instead of ping-ponging.
+-- batch = {[name] = {classIndex = ci, levels = {[level] = dingedAt}}}
+function TheClassicRaceTracker:OnPHSyncResult(batch)
+    local playerHistory = self.DB.factionrealm.playerHistory
+
+    for name, remote in pairs(batch) do
+        if type(remote) == "table" and type(remote.levels) == "table" then
+            if playerHistory[name] == nil then
+                playerHistory[name] = {classIndex = remote.classIndex, levels = {}}
+            end
+            local hist = playerHistory[name]
+
+            if (hist.classIndex == nil or hist.classIndex == 0)
+                    and remote.classIndex ~= nil and remote.classIndex ~= 0 then
+                hist.classIndex = remote.classIndex
+            end
+
+            for level, dingedAt in pairs(remote.levels) do
+                if type(level) == "number" and level >= 2 and level <= 99
+                        and type(dingedAt) == "number" then
+                    if hist.levels[level] == nil or dingedAt < hist.levels[level] then
+                        hist.levels[level] = math.floor(dingedAt)
+                    end
+                end
+            end
+        end
     end
 end
 

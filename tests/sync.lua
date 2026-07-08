@@ -20,7 +20,7 @@ describe("Sync", function()
     local AdvanceClock
 
     -- shorthands for the hashes of our (empty) DB
-    local myGlobalHash, myClassHash, myFTLHash, myFullHash
+    local myGlobalHash, myClassHash, myFTLHash, myFullHash, myPHHash
 
     before_each(function()
         -- easier to only test channel
@@ -47,6 +47,7 @@ describe("Sync", function()
         myClassHash = TheClassicRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[11])
         myFTLHash = TheClassicRace.Sync.ComputeFTLHash(db, TheClassicRace.Config)
         myFullHash = TheClassicRace.Sync.ComputeFullHash(db, TheClassicRace.Config)
+        myPHHash = TheClassicRace.Sync.ComputePHHash(db, TheClassicRace.Config)
     end)
 
     after_each(function()
@@ -60,7 +61,7 @@ describe("Sync", function()
         sync:InitSync()
 
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "YELL")
+                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
         assert.spy(networkSpy).called_at_most(1)
         networkSpy:clear()
 
@@ -78,9 +79,9 @@ describe("Sync", function()
         sync:InitSync()
 
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.RequestSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "YELL")
+                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "YELL")
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.GuildSync,
-                {11, myFullHash, core:LoginTime(), myFTLHash}, "GUILD")
+                {11, myFullHash, core:LoginTime(), myFTLHash, myPHHash}, "GUILD")
         assert.spy(networkSpy).called_at_most(2)
     end)
 
@@ -97,7 +98,7 @@ describe("Sync", function()
 
         -- no hashes known -> sends global + class leaderboards and FTL data
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "WHISPER", "Dude")
+                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload, "", "WHISPER", "Dude")
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
         assert.spy(networkSpy).called_at_most(4)
@@ -133,7 +134,7 @@ describe("Sync", function()
         AdvanceClock(TheClassicRace.Config.RequestSyncWait)
 
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
-                {11, myGlobalHash, myClassHash, myFTLHash}, "WHISPER", "Dude")
+                {11, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync, {""}, "WHISPER", "Dude")
         assert.spy(networkSpy).called_at_most(2)
     end)
@@ -258,7 +259,7 @@ describe("Sync", function()
         eventbus:PublishEvent(NetEvents.RequestSync, 11, "Dude")
 
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash}, "WHISPER", "Dude")
+                {11, nil, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
         assert.spy(networkSpy).called_at_most(1)
         networkSpy:clear()
 
@@ -292,7 +293,7 @@ describe("Sync", function()
                 {11, myGlobalHash, myClassHash + 1, myFTLHash}, "Dude")
 
         assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.OfferSync,
-                {11, nil, myGlobalHash, myClassHash, myFTLHash}, "WHISPER", "Dude")
+                {11, nil, myGlobalHash, myClassHash, myFTLHash, myPHHash}, "WHISPER", "Dude")
         assert.spy(networkSpy).called_at_most(1)
     end)
 
@@ -378,7 +379,7 @@ describe("Sync", function()
             AdvanceClock(TheClassicRace.Config.GuildSyncWait)
 
             assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.GuildOffer,
-                    {11, nil, myFullHash, myGlobalHash, myClassHash, core:LoginTime(), myFTLHash},
+                    {11, nil, myFullHash, myGlobalHash, myClassHash, core:LoginTime(), myFTLHash, myPHHash},
                     "WHISPER", "Dude")
             assert.spy(networkSpy).called_at_most(1)
         end)
@@ -456,6 +457,144 @@ describe("Sync", function()
             eventbus:PublishEvent(NetEvents.StartSync, {11, perClassHashes}, "Dude")
             assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.FTLSync,
                     {""}, "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+    end)
+
+    describe("player history sync", function()
+        local seedHistory
+
+        before_each(function()
+            -- seed a leaderboard member with history so the sync subset is non-empty
+            seedHistory = function()
+                db.factionrealm.leaderboard[0].players = {
+                    {name = "Racer", level = 30, dingedAt = time, classIndex = 4},
+                }
+                db.factionrealm.playerHistory = {
+                    Racer = {classIndex = 4, levels = {[29] = time - 50, [30] = time}},
+                }
+            end
+        end)
+
+        it("pushes player history when the requester announces a differing hash", function()
+            local networkSpy = spy.on(network, "SendObject")
+            seedHistory()
+
+            local globalHash = TheClassicRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
+            local phHash = TheClassicRace.Sync.ComputePHHash(db, TheClassicRace.Config)
+
+            eventbus:PublishEvent(NetEvents.StartSync,
+                    {11, globalHash, myClassHash, myFTLHash, phHash + 1}, "Dude")
+
+            -- chunks are sent via timers
+            AdvanceClock(TheClassicRace.Config.PlayerHistoryChunkDelay)
+
+            local expectedChunk = TheClassicRace.Serializer.SerializePlayerHistoryChunks(
+                    db.factionrealm.playerHistory, {"Racer"}, TheClassicRace.Config.PlayerHistoryChunkSize)[1]
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.PlayerHistorySync,
+                    expectedChunk, "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("doesn't push player history when the requester's hash matches", function()
+            local networkSpy = spy.on(network, "SendObject")
+            seedHistory()
+
+            local globalHash = TheClassicRace.Leaderboard.ComputeHash(db.factionrealm.leaderboard[0])
+            local phHash = TheClassicRace.Sync.ComputePHHash(db, TheClassicRace.Config)
+
+            eventbus:PublishEvent(NetEvents.StartSync,
+                    {11, globalHash, myClassHash, myFTLHash, phHash}, "Dude")
+            AdvanceClock(TheClassicRace.Config.PlayerHistoryChunkDelay)
+
+            assert.spy(networkSpy).called_at_most(0)
+        end)
+
+        it("never pushes player history to old clients that sent no hash", function()
+            local networkSpy = spy.on(network, "SendObject")
+            seedHistory()
+
+            -- old client StartSync: differing global hash but no history hash
+            eventbus:PublishEvent(NetEvents.StartSync,
+                    {11, myGlobalHash + 1, myClassHash, myFTLHash}, "Dude")
+            AdvanceClock(TheClassicRace.Config.PlayerHistoryChunkDelay)
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.SyncPayload,
+                    match.is_string(), "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("marks ready when receiving a player history payload", function()
+            assert.equals(false, sync.isReady)
+
+            eventbus:PublishEvent(NetEvents.PlayerHistorySync, "", "Dude")
+
+            assert.equals(true, sync.isReady)
+        end)
+
+        it("forwards received player history chunks to the tracker", function()
+            local eventBusSpy = spy.on(eventbus, "PublishEvent")
+            seedHistory()
+
+            local chunk = TheClassicRace.Serializer.SerializePlayerHistoryChunks(
+                    db.factionrealm.playerHistory, {"Racer"}, TheClassicRace.Config.PlayerHistoryChunkSize)[1]
+            sync:OnNetPHSync(chunk, "Dude")
+
+            assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), Events.PHSyncResult,
+                    match.is_same({
+                        Racer = {classIndex = 4, levels = {[29] = time - 50, [30] = time}},
+                    }))
+        end)
+
+        it("guild ticker sync doesn't negotiate player history", function()
+            local networkSpy = spy.on(network, "SendObject")
+            _G.SetIsInGuild(true)
+
+            -- ticker-style call, no withPlayerHistory flag
+            sync:SendGuildSync()
+
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.GuildSync,
+                    {11, myFullHash, core:LoginTime(), myFTLHash}, "GUILD")
+            assert.spy(networkSpy).called_at_most(1)
+            networkSpy:clear()
+
+            -- even a partner whose history hash differs doesn't trigger a history pull
+            eventbus:PublishEvent(NetEvents.GuildOffer,
+                    {11, nil, myFullHash + 1, myGlobalHash, myClassHash, time - 100, myFTLHash, myPHHash + 1},
+                    "Dude")
+            AdvanceClock(TheClassicRace.Config.GuildSyncWait + 1)
+
+            local perClassHashes = {}
+            for classIndex = 0, #TheClassicRace.Config.Classes do
+                perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
+                        db.factionrealm.leaderboard[classIndex])
+            end
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
+                    {11, perClassHashes, myFTLHash}, "WHISPER", "Dude")
+            assert.spy(networkSpy).called_at_most(1)
+        end)
+
+        it("login guild sync pulls player history when it differs", function()
+            local networkSpy = spy.on(network, "SendObject")
+            _G.SetIsInGuild(true)
+
+            -- login-style call: negotiate player history too
+            sync:SendGuildSync(true)
+            networkSpy:clear()
+
+            -- partner matches everything except player history
+            eventbus:PublishEvent(NetEvents.GuildOffer,
+                    {11, nil, myFullHash, myGlobalHash, myClassHash, time - 100, myFTLHash, myPHHash + 1},
+                    "Dude")
+            AdvanceClock(TheClassicRace.Config.GuildSyncWait + 1)
+
+            local perClassHashes = {}
+            for classIndex = 0, #TheClassicRace.Config.Classes do
+                perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
+                        db.factionrealm.leaderboard[classIndex])
+            end
+            assert.spy(networkSpy).was_called_with(match.is_ref(network), NetEvents.StartSync,
+                    {11, perClassHashes, myFTLHash, myPHHash}, "WHISPER", "Dude")
             assert.spy(networkSpy).called_at_most(1)
         end)
     end)
