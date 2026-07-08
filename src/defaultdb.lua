@@ -38,7 +38,8 @@ local TheClassicRaceDefaultDB = {
         -- raceStartedAt: earliest dingedAt ever seen; fallback reference when realmOpenedAt is nil
         raceStartedAt = nil,
         -- playerHistory[name] = {classIndex, levels = {[level] = dingedAt}}
-        -- pruned on login to leaderboard members (+ ourselves); synced once per login
+        -- synced once per login (leaderboard players only); non-members are pruned on
+        -- login once the leaderboard they compete on is final (full at max level)
         playerHistory = {},
         -- firstToLevel[classFilter][level] = {name, classIndex, dingedAt}
         -- classFilter 0 = overall, 1-12 = per class (see Config.ClassIndexes)

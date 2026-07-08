@@ -93,10 +93,18 @@ function TheClassicRaceTracker:NormalizeDB()
     self:PrunePlayerHistory()
 end
 
+-- A leaderboard is final when it's full and its lowest member has reached max
+-- level: from then on, players absent from it can no longer enter the race for it.
+local function isLeaderboardFinal(lb, config)
+    return lb ~= nil and #lb.players >= config.MaxLeaderboardSize and lb.minLevel >= config.MaxLevel
+end
+
 -- playerHistory records every character a scan ever saw and would grow unbounded
--- (thousands of players on a busy realm). Only leaderboard members are relevant for
--- the per-character breakdown and for syncing, so on login everyone else is dropped;
--- our own history is always kept.
+-- (thousands of players on a busy realm). While the race is live everyone is kept —
+-- a player who temporarily drops off a leaderboard may re-enter it and would lose
+-- their history otherwise. Once the leaderboard a player competes on is final
+-- (full at max level), or the race is finished, non-members are dropped.
+-- Our own history is always kept.
 function TheClassicRaceTracker:PrunePlayerHistory()
     local playerHistory = self.DB.factionrealm.playerHistory
     if playerHistory == nil then return end
@@ -112,9 +120,24 @@ function TheClassicRaceTracker:PrunePlayerHistory()
     end
     keep[self.Core:Me()] = true
 
-    for name, _ in pairs(playerHistory) do
+    local raceFinished = self.DB.factionrealm.finished
+    local globalFinal = isLeaderboardFinal(self.DB.factionrealm.leaderboard[0], self.Config)
+
+    for name, hist in pairs(playerHistory) do
         if not keep[name] then
-            playerHistory[name] = nil
+            -- players with a known class compete on their class leaderboard;
+            -- unknown-class players are gated on the global leaderboard instead
+            local classIndex = hist ~= nil and hist.classIndex or nil
+            local boardFinal
+            if classIndex ~= nil and classIndex >= 1 and classIndex <= #self.Config.Classes then
+                boardFinal = isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config)
+            else
+                boardFinal = globalFinal
+            end
+
+            if raceFinished or boardFinal then
+                playerHistory[name] = nil
+            end
         end
     end
 end
