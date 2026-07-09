@@ -151,17 +151,22 @@ function TheClassicRaceTracker:PrunePlayerHistory()
 end
 
 function TheClassicRaceTracker:OnScanFinished(endofrace)
-    -- if a scan finished but the result wasn't complete then we have too many max level players
+    -- the scanner believes the race may be over; verify against the actual boards
     if endofrace then
-        self:RaceFinished()
+        self:CheckRaceFinished()
     end
 end
 
 function TheClassicRaceTracker:CheckRaceFinished()
-    -- The race is global: it ends once the global top-N is full at max level.
-    if isLeaderboardFinal(self.DB.factionrealm.leaderboard[0], self.Config) then
-        self:RaceFinished()
+    -- The race isn't over until every playable class has filled its
+    -- leaderboard at max level.
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
+        if not isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config) then
+            return
+        end
     end
+
+    self:RaceFinished()
 end
 
 function TheClassicRaceTracker:RaceFinished()
@@ -503,7 +508,7 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
     TheClassicRace:DebugPrint("[T] ProcessPlayerInfo: [" .. tostring(playerInfo.classIndex) .. "] "
             .. playerInfo.name .. " lvl" .. playerInfo.level)
 
-    local globalRank, globalIsChanged, globalLowestLevel = self.lbGlobal:ProcessPlayerInfo(playerInfo)
+    local globalRank, globalIsChanged = self.lbGlobal:ProcessPlayerInfo(playerInfo)
     local classRank, classIsChanged, classLowestLevel = nil, nil
     -- classIndex 0 (unknown class) has no class leaderboard
     if self.Config:IsValidClassIndex(playerInfo.classIndex) and self.lbPerClass[playerInfo.classIndex] ~= nil then
@@ -519,9 +524,9 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
     end
 
-    -- the race finishes on the global leaderboard: check as soon as its
-    -- lowest ranked member reaches max level
-    if globalLowestLevel == self.Config.MaxLevel or classLowestLevel == self.Config.MaxLevel then
+    -- a class leaderboard can only become final when its lowest ranked
+    -- member reaches max level, so that's the moment to check the race
+    if classLowestLevel == self.Config.MaxLevel then
         self:CheckRaceFinished()
     end
 

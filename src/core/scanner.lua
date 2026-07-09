@@ -267,7 +267,8 @@ function TheClassicRaceScanner:TriggerScan()
         self.lastScanClassIndex = nil
         local lb = self.DB.factionrealm.leaderboard[0]
 
-        -- Global leaderboard is also full with everyone at max level — race is over.
+        -- Global leaderboard is also full with everyone at max level — the race
+        -- may be over; the Tracker verifies every class board before finishing.
         if #lb.players >= maxSize and lb.minLevel >= maxLevel then
             self.EventBus:PublishEvent(TheClassicRace.Config.Events.ScanFinished, true)
             return
