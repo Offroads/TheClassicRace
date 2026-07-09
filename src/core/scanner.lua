@@ -12,7 +12,7 @@ Scanner listens passively to WHO_LIST_UPDATE events and publishes results via Ev
 
 SendWho() is a protected function in MoP Classic and cannot be called from timers or
 any non-hardware-event context. TriggerScan() is therefore wired to hardware events:
-  - WorldFrame OnMouseDown (every in-world click), with a 60s cooldown
+  - WorldFrame OnMouseDown (every in-world click), with a 15s cooldown
   - The minimap icon's OnClick
 
 This mirrors the CensusPlusClassic approach: piggyback on the player's existing
@@ -29,8 +29,10 @@ setmetatable(TheClassicRaceScanner, {
 })
 
 local SCAN_COOLDOWN  = 15  -- seconds between automatic scans
+local SCAN_TIMEOUT   = 60  -- seconds before an unanswered /who is abandoned
 local WHO_RESULT_CAP = 49  -- WoW caps /who results at this count
 local LEVEL_STEP     = 10  -- levels to shift the scan floor up/down
+local CLASS_COMPLETE_TTL = 900  -- seconds before a fully-scanned class is scanned again
 
 function TheClassicRaceScanner.new(Core, DB, EventBus)
     local self = setmetatable({}, TheClassicRaceScanner)
@@ -38,10 +40,15 @@ function TheClassicRaceScanner.new(Core, DB, EventBus)
     self.Core = Core
     self.DB = DB
     self.EventBus = EventBus
-    self.lastScanTime = 0
+    self.lastScanTime = -SCAN_COOLDOWN
     self.nextScanClassIdx = 1  -- cycles through MopClassIndexes
     self.lastScanClassIndex = nil
     self.classScanFloor = {}   -- per-class adaptive floor level
+    self.classScanComplete = {} -- per-class: time a full-range scan returned complete
+    self.globalScanFloor = nil
+    self.globalResultFull = nil
+    self.scanPending = false
+    self.pendingScanMin = nil
     self.lastResultFull = {}   -- per-class: did last scan hit WHO_RESULT_CAP?
 
     self.whoFrame = CreateFrame("Frame")
@@ -67,20 +74,51 @@ end
 function TheClassicRaceScanner:InitTicker(offset)
 end
 
+function TheClassicRaceScanner:ResetState()
+    self.lastScanTime = -SCAN_COOLDOWN
+    self.nextScanClassIdx = 1
+    self.lastScanClassIndex = nil
+    self.classScanFloor = {}
+    self.lastResultFull = {}
+    self.classScanComplete = {}
+    self.globalScanFloor = nil
+    self.globalResultFull = nil
+    self.scanPending = false
+    self.pendingScanMin = nil
+end
+
 function TheClassicRaceScanner:OnWhoListUpdate()
-    -- Restore FriendsFrame so manual /who works normally again
+    if not self.scanPending then return end
+
+    self.scanPending = false
+
+    -- Restore FriendsFrame so manual /who works normally again.
+    -- Must happen before any early return, or manual /who stays broken.
     local ff = _G.FriendsFrame
     if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
 
-    if self.DB.factionrealm.finished then return end
+    if self.DB.factionrealm.finished then
+        self.pendingScanMin = nil
+        return
+    end
 
     local total, numShown = C_FriendList.GetNumWhoResults()
-    numShown = numShown or total
-    if not numShown or numShown == 0 then return end
+    numShown = numShown or total or 0
+    local resultComplete = numShown < WHO_RESULT_CAP
 
     if self.lastScanClassIndex then
-        self.lastResultFull[self.lastScanClassIndex] = (numShown >= WHO_RESULT_CAP)
+        self.lastResultFull[self.lastScanClassIndex] = not resultComplete
+        if resultComplete and self.pendingScanMin ~= nil and self.pendingScanMin <= 2 then
+            -- /who only returns online players, so a complete result is just a
+            -- snapshot: rest the class for CLASS_COMPLETE_TTL, don't retire it.
+            self.classScanComplete[self.lastScanClassIndex] = GetTime()
+        end
+    else
+        self.globalResultFull = not resultComplete
     end
+    self.pendingScanMin = nil
+
+    if numShown == 0 then return end
 
     local batch = {}
     for i = 1, numShown do
@@ -100,12 +138,14 @@ function TheClassicRaceScanner:OnWhoListUpdate()
         end
 
         if name and level and level > 1 then
-            local playerName = self.Core:SplitFullPlayer(name)
-            table.insert(batch, {
-                name  = playerName,
-                level = level,
-                class = filename and string.upper(filename) or nil,
-            })
+            local playerName, playerRealm = self.Core:SplitFullPlayer(name)
+            if playerRealm == nil or self.Core:IsMyRealm(playerRealm) then
+                table.insert(batch, {
+                    name  = playerName,
+                    level = level,
+                    class = filename and string.upper(filename) or nil,
+                })
+            end
         end
     end
 
@@ -121,11 +161,22 @@ end
 -- TriggerScan sends a /who query for the next class leaderboard that isn't full.
 -- Once all class leaderboards reach 50 players it falls back to a global level scan.
 -- MUST be called from a hardware event context (mouse click, key press).
--- Safe to call frequently — enforces a 60s cooldown internally.
+-- Safe to call frequently; enforces a 15s cooldown internally.
 function TheClassicRaceScanner:TriggerScan()
     if self.DB.factionrealm.finished then return end
 
     local now = GetTime()
+
+    if self.scanPending then
+        if now - self.lastScanTime < SCAN_TIMEOUT then return end
+        -- The server silently dropped the /who response; abandon the pending
+        -- scan so a lost reply can't disable scanning for the whole session.
+        self.scanPending = false
+        self.pendingScanMin = nil
+        local ff = _G.FriendsFrame
+        if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
+    end
+
     if now - self.lastScanTime < SCAN_COOLDOWN then return end
     self.lastScanTime = now
 
@@ -135,11 +186,20 @@ function TheClassicRaceScanner:TriggerScan()
     local numClasses = #validIdx
     local query      = nil
 
-    -- On first scan (no data yet), do a broad top-range query to seed all leaderboards at once.
+    -- Bootstrap from the top, then widen the range when the result is complete
+    -- but empty. This lets a fresh low-pop realm discover its first players.
     local globalLb = self.DB.factionrealm.leaderboard[0]
     if not globalLb or #globalLb.players == 0 then
         self.lastScanClassIndex = nil
-        local scanMin = math.max(maxLevel - 10, 1)
+        local scanMin
+        if self.globalScanFloor == nil then
+            scanMin = math.max(maxLevel - 10, 1)
+        elseif self.globalResultFull then
+            scanMin = math.min(self.globalScanFloor + LEVEL_STEP, maxLevel - 1)
+        else
+            scanMin = math.max(self.globalScanFloor - LEVEL_STEP, 2)
+        end
+        self.globalScanFloor = scanMin
         query = tostring(scanMin) .. "-" .. tostring(maxLevel)
     end
 
@@ -151,7 +211,11 @@ function TheClassicRaceScanner:TriggerScan()
         local classLb    = self.DB.factionrealm.leaderboard[classIndex]
         local className  = TheClassicRace.Config.Classes[classIndex]
         local filter     = TheClassicRace.Config.WhoClassFilter[className]
-        local isDone     = classLb and #classLb.players >= maxSize and classLb.minLevel >= maxLevel
+        local completeAt = self.classScanComplete[classIndex]
+        local restingComplete = completeAt ~= nil and now - completeAt < CLASS_COMPLETE_TTL
+        local isDone = classLb and (
+                restingComplete
+                or (#classLb.players >= maxSize and classLb.minLevel >= maxLevel))
 
         if filter and classLb and not isDone then
             self.nextScanClassIdx = (slot % numClasses) + 1
@@ -202,10 +266,12 @@ function TheClassicRaceScanner:TriggerScan()
 
     TheClassicRace:DebugPrint("Scanning /who " .. query)
 
-    if C_FriendList then
+    if C_FriendList and C_FriendList.SendWho then
         local ff = _G.FriendsFrame
         if ff then ff:UnregisterEvent("WHO_LIST_UPDATE") end
         if C_FriendList.SetWhoToUi then C_FriendList.SetWhoToUi(true) end
-        if C_FriendList.SendWho then C_FriendList.SendWho(query) end
+        self.pendingScanMin = tonumber(string.match(query, "^(%d+)-"))
+        self.scanPending = true
+        C_FriendList.SendWho(query)
     end
 end

@@ -23,7 +23,7 @@ function leaderboardSpies(tracker, config)
 
     spies[0] = spy.on(tracker.lbGlobal, "ProcessPlayerInfo")
 
-    for classIndex, _ in ipairs(config.Classes) do
+    for _, classIndex in ipairs(config.MopClassIndexes) do
         spies[classIndex] = spy.on(tracker.lbPerClass[classIndex], "ProcessPlayerInfo")
     end
 
@@ -321,6 +321,20 @@ describe("Tracker", function()
             tracker:OnScanFinished(true)
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), Events.RaceFinished)
             assert.spy(eventBusSpy).called_at_most(1)
+        end)
+
+        it("finishes when the global leaderboard is full at max level", function()
+            local players = {}
+            for i = 1, config.MaxLeaderboardSize do
+                players[i] = {name = "Racer" .. i, level = config.MaxLevel,
+                              dingedAt = time + i, classIndex = WARRIORIDX}
+            end
+            db.factionrealm.leaderboard[0].players = players
+            db.factionrealm.leaderboard[0].minLevel = config.MaxLevel
+
+            tracker:CheckRaceFinished()
+
+            assert.is_true(db.factionrealm.finished)
         end)
     end)
 

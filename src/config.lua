@@ -173,6 +173,16 @@ local TheClassicRaceConfig = {
 }
 TheClassicRace.Config = TheClassicRaceConfig
 
+function TheClassicRaceConfig:IsValidClassIndex(classIndex)
+    for _, validClassIndex in ipairs(self.MopClassIndexes) do
+        if classIndex == validClassIndex then
+            return true
+        end
+    end
+
+    return false
+end
+
 function TheClassicRaceConfig:DetectExpansion()
     local _, _, _, tocVersion = GetBuildInfo()
     if tocVersion < 20000 then

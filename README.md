@@ -6,7 +6,7 @@ This is a WoW addon to keep track of the top 50 players on your realm in the rac
 ![demo](https://raw.githubusercontent.com/rubensayshi/TheClassicRace/master/demo.png)
 
 ## Releases
-For latest releases that you can just unzip into your `Interface\Addons` folder, 
+For latest releases that you can just unzip into your `Interface\Addons` folder,
 please download from CurseForge or WoWInterface:
  - Curse: https://www.curseforge.com/wow/addons/the-classic-race
  - WoWInterface: https://www.wowinterface.com/downloads/info25052-TheClassicRace.html
@@ -20,7 +20,7 @@ make setup-dev
 ```
 
 ## Libs
-WoW Addon depedency ecosystem is a mess ... we'll just use the release script to fetch the deps, 
+WoW Addon depedency ecosystem is a mess ... we'll just use the release script to fetch the deps,
 you can fetch them with:
 ```bash
 # only downloads if no `./libs` exists
@@ -39,25 +39,25 @@ make lint tests
 make reflex-tests
 
 # you can specify a subset of the test files to run with INCLUDES var, like;
-make reflex-tests INCLUDES=scan.lua
+make reflex-tests INCLUDES=scanner.lua
 
 # or a name of a test with with TESTS var, like;
 make reflex-tests TESTS='.*too many max lvl.*'
 ```
 
-Test coverage is a bit a lie ... it only shows coverage for the files included in the testsuite run,  
-but we don't include `main.lua`, `options.lua`, `scanner.lua` and the `gui/*.lua` files...  
+Test coverage is a bit a lie ... it only shows coverage for the files included in the testsuite run,
+but we don't include `main.lua`, `options.lua` and the `gui/*.lua` files...
 
 The other stuff is well covered and we <3 mocks.
 
 ## Structure
-We're trying to avoid using globals as much as possible, so all components are bound to our addon global `TheClassicRace`  
-and we generally pass components to other components that depend on them at initialization.  
+We're trying to avoid using globals as much as possible, so all components are bound to our addon global `TheClassicRace`
+and we generally pass components to other components that depend on them at initialization.
 The only `TheClassicRace.` or `TheClassicRace:` access should be for `Config` and the `*Print` methods.
 
 For some decoupling we can use the `EventBus` to propagate events as well...
 
-We don't write unittests for `main.lua`, `options.lua`, `scanner.lua` and the `gui/*.lua` files, 
-because they're so highly dependant on so many libs which in turn are so highly dependent on so many WoW API methods 
-that we'd have to mock way to many things...  
+We don't write unittests for `main.lua`, `options.lua` and the `gui/*.lua` files; `scanner.lua` is covered with API stubs,
+because they're highly dependent on WoW APIs and external libraries
+that broad integration coverage would be expensive to maintain.
 For this reason we try to avoid too much logic in these places!
