@@ -90,36 +90,14 @@ end
 function TheClassicRaceScanner:OnWhoListUpdate()
     if not self.scanPending then return end
 
-    self.scanPending = false
-
-    -- Restore FriendsFrame so manual /who works normally again.
-    -- Must happen before any early return, or manual /who stays broken.
-    local ff = _G.FriendsFrame
-    if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
-
-    if self.DB.factionrealm.finished then
-        self.pendingScanMin = nil
-        return
-    end
-
     local total, numShown = C_FriendList.GetNumWhoResults()
     numShown = numShown or total or 0
-    local resultComplete = numShown < WHO_RESULT_CAP
 
-    if self.lastScanClassIndex then
-        self.lastResultFull[self.lastScanClassIndex] = not resultComplete
-        if resultComplete and self.pendingScanMin ~= nil and self.pendingScanMin <= 2 then
-            -- /who only returns online players, so a complete result is just a
-            -- snapshot: rest the class for CLASS_COMPLETE_TTL, don't retire it.
-            self.classScanComplete[self.lastScanClassIndex] = GetTime()
-        end
-    else
-        self.globalResultFull = not resultComplete
-    end
-    self.pendingScanMin = nil
-
-    if numShown == 0 then return end
-
+    -- Collect the rows first: a manual /who fired while our scan is pending
+    -- also raises WHO_LIST_UPDATE, and must not be misattributed to the scan.
+    local pendingClass = self.lastScanClassIndex ~= nil
+            and TheClassicRace.Config.Classes[self.lastScanClassIndex] or nil
+    local matchesQuery = true
     local batch = {}
     for i = 1, numShown do
         local name, level, filename
@@ -137,6 +115,13 @@ function TheClassicRaceScanner:OnWhoListUpdate()
             filename = charFilename
         end
 
+        if level ~= nil and self.pendingScanMin ~= nil and level < self.pendingScanMin then
+            matchesQuery = false
+        end
+        if filename ~= nil and pendingClass ~= nil and string.upper(filename) ~= pendingClass then
+            matchesQuery = false
+        end
+
         if name and level and level > 1 then
             local playerName, playerRealm = self.Core:SplitFullPlayer(name)
             if playerRealm == nil or self.Core:IsMyRealm(playerRealm) then
@@ -148,6 +133,36 @@ function TheClassicRaceScanner:OnWhoListUpdate()
             end
         end
     end
+
+    -- Not our scan's response: leave the scan pending, the real response
+    -- (or the SCAN_TIMEOUT in TriggerScan) will resolve it.
+    if not matchesQuery then return end
+
+    self.scanPending = false
+
+    -- Restore FriendsFrame so manual /who works normally again.
+    -- Must happen before any early return, or manual /who stays broken.
+    local ff = _G.FriendsFrame
+    if ff then ff:RegisterEvent("WHO_LIST_UPDATE") end
+
+    if self.DB.factionrealm.finished then
+        self.pendingScanMin = nil
+        return
+    end
+
+    local resultComplete = numShown < WHO_RESULT_CAP
+
+    if self.lastScanClassIndex then
+        self.lastResultFull[self.lastScanClassIndex] = not resultComplete
+        if resultComplete and self.pendingScanMin ~= nil and self.pendingScanMin <= 2 then
+            -- /who only returns online players, so a complete result is just a
+            -- snapshot: rest the class for CLASS_COMPLETE_TTL, don't retire it.
+            self.classScanComplete[self.lastScanClassIndex] = GetTime()
+        end
+    else
+        self.globalResultFull = not resultComplete
+    end
+    self.pendingScanMin = nil
 
     if #batch == 0 then return end
 

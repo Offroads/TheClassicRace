@@ -493,10 +493,17 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         playerInfo.class = nil
     end
 
+    -- remote data is untrusted: a forged level above the configured max would
+    -- permanently outrank every real player and falsely finish the race
+    if type(playerInfo.level) ~= "number" or playerInfo.level > self.Config.MaxLevel then
+        TheClassicRace:DebugPrint("Ignored player info with invalid level: " .. tostring(playerInfo.level))
+        return
+    end
+
     TheClassicRace:DebugPrint("[T] ProcessPlayerInfo: [" .. tostring(playerInfo.classIndex) .. "] "
             .. playerInfo.name .. " lvl" .. playerInfo.level)
 
-    local globalRank, globalIsChanged = self.lbGlobal:ProcessPlayerInfo(playerInfo)
+    local globalRank, globalIsChanged, globalLowestLevel = self.lbGlobal:ProcessPlayerInfo(playerInfo)
     local classRank, classIsChanged, classLowestLevel = nil, nil
     -- classIndex 0 (unknown class) has no class leaderboard
     if self.Config:IsValidClassIndex(playerInfo.classIndex) and self.lbPerClass[playerInfo.classIndex] ~= nil then
@@ -512,8 +519,9 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
     end
 
-    -- check if the race is finished if the class leaderboard is finished
-    if classLowestLevel == self.Config.MaxLevel then
+    -- the race finishes on the global leaderboard: check as soon as its
+    -- lowest ranked member reaches max level
+    if globalLowestLevel == self.Config.MaxLevel or classLowestLevel == self.Config.MaxLevel then
         self:CheckRaceFinished()
     end
 

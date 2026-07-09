@@ -336,6 +336,32 @@ describe("Tracker", function()
 
             assert.is_true(db.factionrealm.finished)
         end)
+
+        it("finishes via ProcessPlayerInfo when the final ding fills the global leaderboard", function()
+            local players = {}
+            for i = 1, config.MaxLeaderboardSize - 1 do
+                players[i] = {name = "Racer" .. i, level = config.MaxLevel,
+                              dingedAt = time + i, classIndex = PRIESTIDX}
+            end
+            db.factionrealm.leaderboard[0].players = players
+            -- the finisher's class board holds a sub-max player, so the class
+            -- board's lowest level stays below max and can't be the trigger
+            db.factionrealm.leaderboard[WARRIORIDX].players = {
+                {name = "Lowbie", level = 80, dingedAt = time, classIndex = WARRIORIDX},
+            }
+            tracker:ReinitLeaderboards()
+
+            tracker:ProcessPlayerInfo(playerInfo("Lastracer", config.MaxLevel, WARRIORIDX))
+
+            assert.is_true(db.factionrealm.finished)
+        end)
+
+        it("rejects player info with a level above max level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Cheater", 999, WARRIORIDX))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(db.factionrealm.playerHistory["Cheater"])
+        end)
     end)
 
     describe("Sync", function()

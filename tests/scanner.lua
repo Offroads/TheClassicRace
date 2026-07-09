@@ -95,6 +95,33 @@ describe("Scanner", function()
         assert.equals("70-90", GetWhoQuery())
     end)
 
+    it("does not attribute a manual /who to a pending class scan", function()
+        db.factionrealm.leaderboard[0].players = {
+            {name = "Seed", level = 90, classIndex = 1, dingedAt = time},
+        }
+
+        scanner:TriggerScan()
+        assert.equals("60-90 c-Warrior", GetWhoQuery())
+
+        -- a manual "/who Orgrimmar" style result: wrong class, level below range
+        local eventBusSpy = spy.on(eventbus, "PublishEvent")
+        SetWhoResults({{fullName = "Lowbie", level = 30, filename = "MAGE"}})
+        scanner:OnWhoListUpdate()
+
+        assert.spy(eventBusSpy).called_at_most(0)
+        assert.is_true(scanner.scanPending)
+        assert.is_nil(scanner.classScanComplete[1])
+
+        -- the scan's real response still gets consumed afterwards
+        SetWhoResults({{fullName = "Warr", level = 65, filename = "WARRIOR"}})
+        scanner:OnWhoListUpdate()
+
+        assert.is_false(scanner.scanPending)
+        assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus),
+                TheClassicRace.Config.Events.SlashWhoResult,
+                {{name = "Warr", level = 65, class = "WARRIOR"}}, 1)
+    end)
+
     it("restores FriendsFrame when the race finishes mid-scan", function()
         scanner:TriggerScan()
         db.factionrealm.finished = true
