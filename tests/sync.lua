@@ -4,6 +4,13 @@ local TheClassicRace = require("testbase")
 -- aliases
 local Events = TheClassicRace.Config.Events
 local NetEvents = TheClassicRace.Config.Network.Events
+local function leaderboardClassIndexes()
+    local indexes = {0}
+    for _, classIndex in ipairs(TheClassicRace.Config.MopClassIndexes) do
+        indexes[#indexes + 1] = classIndex
+    end
+    return indexes
+end
 
 describe("Sync", function()
     local db
@@ -431,7 +438,7 @@ describe("Sync", function()
             local networkSpy = spy.on(network, "SendObject")
 
             local perClassHashes = {}
-            for classIndex = 0, #TheClassicRace.Config.Classes do
+            for _, classIndex in ipairs(leaderboardClassIndexes()) do
                 perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end
@@ -449,7 +456,7 @@ describe("Sync", function()
             local networkSpy = spy.on(network, "SendObject")
 
             local perClassHashes = {}
-            for classIndex = 0, #TheClassicRace.Config.Classes do
+            for _, classIndex in ipairs(leaderboardClassIndexes()) do
                 perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end
@@ -565,7 +572,7 @@ describe("Sync", function()
             AdvanceClock(TheClassicRace.Config.GuildSyncWait + 1)
 
             local perClassHashes = {}
-            for classIndex = 0, #TheClassicRace.Config.Classes do
+            for _, classIndex in ipairs(leaderboardClassIndexes()) do
                 perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end
@@ -589,7 +596,7 @@ describe("Sync", function()
             AdvanceClock(TheClassicRace.Config.GuildSyncWait + 1)
 
             local perClassHashes = {}
-            for classIndex = 0, #TheClassicRace.Config.Classes do
+            for _, classIndex in ipairs(leaderboardClassIndexes()) do
                 perClassHashes[classIndex + 1] = TheClassicRace.Leaderboard.ComputeHash(
                         db.factionrealm.leaderboard[classIndex])
             end

@@ -55,6 +55,12 @@ describe("Serializer", function()
             assert.same(nub5, DeserPInfo(nub5str))
         end)
 
+        it("round-trips levels above 99 using the extended format", function()
+            local playerInfo = {name = "Nubone", level = 100, dingedAt = time, classIndex = 12}
+
+            assert.equals("!100:12:Nubone:1000000000", SerPInfo(playerInfo))
+            assert.same(playerInfo, DeserPInfo(SerPInfo(playerInfo)))
+        end)
         it("it more compact than AceSerializer", function()
             local nub1 = {name = "Nubone", level = 5, dingedAt = time, classIndex = 11}
 
@@ -129,7 +135,7 @@ describe("Serializer", function()
             assert.equals("Aardvark", result[0][5].name)
         end)
 
-        it("skips entries that don't fit the wire format on serialize", function()
+        it("round-trips levels above 99 using the extended format", function()
             local t = 1000000000
             local ftl = {
                 [0] = {
@@ -140,7 +146,7 @@ describe("Serializer", function()
             }
             local result = DeserFTLBatch(SerFTLBatch(ftl))
             assert.is_nil(result[0][1])
-            assert.is_nil(result[0][100])
+            assert.equals("Impossible", result[0][100].name)
             assert.equals("Racer", result[0][10].name)
         end)
 
@@ -212,7 +218,7 @@ describe("Serializer", function()
             assert.same(playerHistory, merged)
         end)
 
-        it("skips levels that don't fit the wire format and players without valid levels", function()
+        it("keeps valid levels and skips players without a ding", function()
             local t = 1000000000
             local playerHistory = {
                 Alice = {classIndex = 3, levels = {[1] = t, [15] = t + 100, [100] = t}},
@@ -223,7 +229,7 @@ describe("Serializer", function()
             assert.equals(1, #chunks)
 
             local result = DeserPHBatch(chunks[1])
-            assert.same({Alice = {classIndex = 3, levels = {[15] = t + 100}}}, result)
+            assert.same({Alice = {classIndex = 3, levels = {[15] = t + 100, [100] = t}}}, result)
         end)
 
         it("round-trips names containing a dash", function()
@@ -277,6 +283,7 @@ describe("Serializer", function()
                     batchstr)
             assert.same(batch, DeserPInfoBatch(batchstr))
         end)
+
 
         it("it more compact than AceSerializer", function()
             local nub1 = {name = "Nubone", level = 5, dingedAt = time, classIndex = 11}

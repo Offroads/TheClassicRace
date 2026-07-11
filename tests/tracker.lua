@@ -23,7 +23,7 @@ function leaderboardSpies(tracker, config)
 
     spies[0] = spy.on(tracker.lbGlobal, "ProcessPlayerInfo")
 
-    for classIndex, _ in ipairs(config.Classes) do
+    for _, classIndex in ipairs(config.MopClassIndexes) do
         spies[classIndex] = spy.on(tracker.lbPerClass[classIndex], "ProcessPlayerInfo")
     end
 
@@ -311,7 +311,29 @@ describe("Tracker", function()
     end)
 
     describe("RaceFinished", function()
+        -- fills the class leaderboards with max-level players, optionally
+        -- leaving some class boards one player short
+        local function fillClassLeaderboards(missing)
+            missing = missing or {}
+            for _, classIndex in ipairs(TheClassicRace.Config.MopClassIndexes) do
+                local size = config.MaxLeaderboardSize
+                if missing[classIndex] then size = size - 1 end
+
+                local players = {}
+                for i = 1, size do
+                    players[i] = {name = "C" .. classIndex .. "Racer" .. i, level = config.MaxLevel,
+                                  dingedAt = time + i, classIndex = classIndex}
+                end
+                db.factionrealm.leaderboard[classIndex].players = players
+                if size >= config.MaxLeaderboardSize then
+                    db.factionrealm.leaderboard[classIndex].minLevel = config.MaxLevel
+                end
+            end
+            tracker:ReinitLeaderboards()
+        end
+
         it("produces RaceFinished event once", function()
+            fillClassLeaderboards()
             local eventBusSpy = spy.on(eventbus, "PublishEvent")
 
             tracker:OnScanFinished(false)
@@ -321,6 +343,46 @@ describe("Tracker", function()
             tracker:OnScanFinished(true)
             assert.spy(eventBusSpy).was_called_with(match.is_ref(eventbus), Events.RaceFinished)
             assert.spy(eventBusSpy).called_at_most(1)
+        end)
+
+        it("finishes when every class leaderboard is full at max level", function()
+            fillClassLeaderboards()
+
+            tracker:CheckRaceFinished()
+
+            assert.is_true(db.factionrealm.finished)
+        end)
+
+        it("does not finish while a class leaderboard is unfilled", function()
+            fillClassLeaderboards({[PALADINIDX] = true})
+            -- a full global leaderboard at max level is not sufficient
+            local players = {}
+            for i = 1, config.MaxLeaderboardSize do
+                players[i] = {name = "Racer" .. i, level = config.MaxLevel,
+                              dingedAt = time + i, classIndex = WARRIORIDX}
+            end
+            db.factionrealm.leaderboard[0].players = players
+            db.factionrealm.leaderboard[0].minLevel = config.MaxLevel
+
+            tracker:CheckRaceFinished()
+            tracker:OnScanFinished(true)
+
+            assert.is_false(db.factionrealm.finished)
+        end)
+
+        it("finishes via ProcessPlayerInfo when the final ding fills the last class leaderboard", function()
+            fillClassLeaderboards({[WARRIORIDX] = true})
+
+            tracker:ProcessPlayerInfo(playerInfo("Lastracer", config.MaxLevel, WARRIORIDX))
+
+            assert.is_true(db.factionrealm.finished)
+        end)
+
+        it("rejects player info with a level above max level", function()
+            tracker:ProcessPlayerInfo(playerInfo("Cheater", 999, WARRIORIDX))
+
+            assert.equals(0, #db.factionrealm.leaderboard[0].players)
+            assert.is_nil(db.factionrealm.playerHistory["Cheater"])
         end)
     end)
 

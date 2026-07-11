@@ -11,6 +11,11 @@ local AceComm = LibStub:GetLibrary("AceComm-3.0")
 local LibCompress = LibStub:GetLibrary("LibCompress")
 local EncodeTable = LibCompress:GetAddonEncodeTable()
 
+local NetworkEvents = {}
+for _, event in pairs(TheClassicRace.Config.Network.Events) do
+    NetworkEvents[event] = true
+end
+
 local function debugLogPayload(event, payload)
     if event == TheClassicRace.Config.Network.Events.PlayerInfoBatch then
         local batchstr, isRebroadcast, classIndex = payload[1], payload[2], payload[3]
@@ -109,6 +114,13 @@ function TheClassicRaceNetwork:HandleAddonMessage(...)
         end
 
         local event, payload = object[1], object[2]
+
+        -- Local EventBus events are not part of the addon-wire protocol. Without
+        -- this guard, another addon client could invoke local state transitions.
+        if type(event) ~= "string" or not NetworkEvents[event] then
+            TheClassicRace:DebugPrint("Ignored unknown network event: " .. tostring(event))
+            return
+        end
 
         TheClassicRace:TracePrint("Received Network Event: " .. event .. " From: " .. sender)
         TheClassicRace:DebugPrint("Recv " .. event .. " <- " .. sender)

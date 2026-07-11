@@ -119,7 +119,12 @@ end
 -- Populates firstToLevel and playerHistory from whatever leaderboard data already exists.
 -- Only runs once per DB (on first load after the pioneers feature is introduced).
 function TheClassicRace:MigratePioneerData()
-    for classIndex = 0, #self.Config.Classes do
+    local classIndexes = {0}
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
+        classIndexes[#classIndexes + 1] = classIndex
+    end
+
+    for _, classIndex in ipairs(classIndexes) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         if lb and #lb.players > 0 then
             for _, player in ipairs(lb.players) do
@@ -142,6 +147,9 @@ function TheClassicRace:ResetDB()
     end
     if self.Tracker then
         self.Tracker:ReinitLeaderboards()
+    end
+    if self.scanner then
+        self.scanner:ResetState()
     end
 end
 

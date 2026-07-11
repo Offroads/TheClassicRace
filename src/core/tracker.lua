@@ -17,6 +17,14 @@ to us through the EventBus.
 ---@field lbGlobal TheClassicRaceLeaderboard
 ---@field lbPerClass table<string, TheClassicRaceLeaderboard>
 local TheClassicRaceTracker = {}
+
+local function leaderboardClassIndexes(config)
+    local indexes = {0}
+    for _, classIndex in ipairs(config.MopClassIndexes) do
+        indexes[#indexes + 1] = classIndex
+    end
+    return indexes
+end
 TheClassicRaceTracker.__index = TheClassicRaceTracker
 TheClassicRace.Tracker = TheClassicRaceTracker
 setmetatable(TheClassicRaceTracker, {
@@ -58,7 +66,7 @@ end
 function TheClassicRaceTracker:ReinitLeaderboards()
     self.lbGlobal = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[0])
     self.lbPerClass = {}
-    for classIndex, _ in ipairs(self.Config.Classes) do
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
         self.lbPerClass[classIndex] = TheClassicRace.Leaderboard(self.Config, self.DB.factionrealm.leaderboard[classIndex])
     end
 end
@@ -67,7 +75,7 @@ end
 -- every leaderboard into the canonical order. Stored order predating the deterministic
 -- sort otherwise causes permanent hash mismatches between clients holding identical data.
 function TheClassicRaceTracker:NormalizeDB()
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         if lb then
             for _, player in ipairs(lb.players) do
@@ -110,7 +118,7 @@ function TheClassicRaceTracker:PrunePlayerHistory()
     if playerHistory == nil then return end
 
     local keep = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         if lb then
             for _, player in ipairs(lb.players) do
@@ -129,7 +137,7 @@ function TheClassicRaceTracker:PrunePlayerHistory()
             -- unknown-class players are gated on the global leaderboard instead
             local classIndex = hist ~= nil and hist.classIndex or nil
             local boardFinal
-            if classIndex ~= nil and classIndex >= 1 and classIndex <= #self.Config.Classes then
+            if self.Config:IsValidClassIndex(classIndex) then
                 boardFinal = isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config)
             else
                 boardFinal = globalFinal
@@ -143,24 +151,22 @@ function TheClassicRaceTracker:PrunePlayerHistory()
 end
 
 function TheClassicRaceTracker:OnScanFinished(endofrace)
-    -- if a scan finished but the result wasn't complete then we have too many max level players
+    -- the scanner believes the race may be over; verify against the actual boards
     if endofrace then
-        self:RaceFinished()
+        self:CheckRaceFinished()
     end
 end
 
 function TheClassicRaceTracker:CheckRaceFinished()
-    local raceFinished = true
-    for _, lbdb in pairs(self.DB.factionrealm.leaderboard) do
-        if lbdb.minLevel < self.Config.MaxLevel then
-            raceFinished = false
-            break
+    -- The race isn't over until every playable class has filled its
+    -- leaderboard at max level.
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
+        if not isLeaderboardFinal(self.DB.factionrealm.leaderboard[classIndex], self.Config) then
+            return
         end
     end
 
-    if raceFinished then
-        self:RaceFinished()
-    end
+    self:RaceFinished()
 end
 
 function TheClassicRaceTracker:RaceFinished()
@@ -268,7 +274,7 @@ end
 -- Any difference in any leaderboard produces a different hash.
 function TheClassicRaceTracker:ComputeFullHash()
     local hash = 5381
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         if lb then
             hash = ((hash * 33) + TheClassicRace.Leaderboard.ComputeHash(lb)) % 2147483647
@@ -285,7 +291,7 @@ function TheClassicRaceTracker:ComputeNeedSet(requesterClassHashes)
         return nil
     end
     local needSet = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         local myHash = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
         local theirHash = requesterClassHashes[classIndex + 1] or 0
@@ -321,7 +327,7 @@ function TheClassicRaceTracker:CollectBatches(needSet)
         batches[#batches + 1] = { players = globalPlayers, classIndex = 0 }
     end
 
-    for classIndex, _ in ipairs(self.Config.Classes) do
+    for _, classIndex in ipairs(self.Config.MopClassIndexes) do
         if needSet == nil or needSet[classIndex] then
             local lb = self.DB.factionrealm.leaderboard[classIndex]
             if lb and #lb.players > 0 then
@@ -450,7 +456,7 @@ function TheClassicRaceTracker:OnNetDataAvailable(hash, sender)
 
     -- send per-class hashes as 1-based array (index i+1 = leaderboard[i])
     local classHashes = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         classHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
@@ -492,13 +498,20 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         playerInfo.class = nil
     end
 
+    -- remote data is untrusted: a forged level above the configured max would
+    -- permanently outrank every real player and falsely finish the race
+    if type(playerInfo.level) ~= "number" or playerInfo.level > self.Config.MaxLevel then
+        TheClassicRace:DebugPrint("Ignored player info with invalid level: " .. tostring(playerInfo.level))
+        return
+    end
+
     TheClassicRace:DebugPrint("[T] ProcessPlayerInfo: [" .. tostring(playerInfo.classIndex) .. "] "
             .. playerInfo.name .. " lvl" .. playerInfo.level)
 
     local globalRank, globalIsChanged = self.lbGlobal:ProcessPlayerInfo(playerInfo)
     local classRank, classIsChanged, classLowestLevel = nil, nil
     -- classIndex 0 (unknown class) has no class leaderboard
-    if playerInfo.classIndex ~= nil and self.lbPerClass[playerInfo.classIndex] ~= nil then
+    if self.Config:IsValidClassIndex(playerInfo.classIndex) and self.lbPerClass[playerInfo.classIndex] ~= nil then
         classRank, classIsChanged, classLowestLevel = self.lbPerClass[playerInfo.classIndex]:ProcessPlayerInfo(playerInfo)
     end
 
@@ -511,7 +524,8 @@ function TheClassicRaceTracker:ProcessPlayerInfo(playerInfo)
         self.EventBus:PublishEvent(self.Config.Events.Ding, playerInfo, globalRank, classRank)
     end
 
-    -- check if the race is finished if the class leaderboard is finished
+    -- a class leaderboard can only become final when its lowest ranked
+    -- member reaches max level, so that's the moment to check the race
     if classLowestLevel == self.Config.MaxLevel then
         self:CheckRaceFinished()
     end
@@ -574,8 +588,8 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     local level = playerInfo.level
     local classIndex = playerInfo.classIndex
 
-    -- level 1 is not a ding, and levels above 99 don't fit the 2-digit wire format
-    if level < 2 or level > 99 then return end
+    -- level 1 is not a ding, and levels outside the configured range are ignored
+    if level < 2 or level > self.Config.MaxLevel then return end
 
     -- track the earliest detection as race start
     if db.raceStartedAt == nil or dingedAt < db.raceStartedAt then
@@ -587,7 +601,7 @@ function TheClassicRaceTracker:UpdatePioneers(playerInfo)
     mergeFTLRecord(db.firstToLevel[0], level, name, classIndex, dingedAt)
 
     -- per-class
-    if classIndex ~= nil and classIndex ~= 0 then
+    if self.Config:IsValidClassIndex(classIndex) then
         if db.firstToLevel[classIndex] == nil then db.firstToLevel[classIndex] = {} end
         mergeFTLRecord(db.firstToLevel[classIndex], level, name, classIndex, dingedAt)
     end
@@ -613,7 +627,7 @@ function TheClassicRaceTracker:OnPHSyncResult(batch)
             end
 
             for level, dingedAt in pairs(remote.levels) do
-                if type(level) == "number" and level >= 2 and level <= 99
+                if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
                         and type(dingedAt) == "number" then
                     if hist.levels[level] == nil or dingedAt < hist.levels[level] then
                         hist.levels[level] = math.floor(dingedAt)
@@ -634,17 +648,19 @@ function TheClassicRaceTracker:OnFTLSyncResult(ftldb, remoteRealmOpenedAt)
     end
 
     for classFilter, levels in pairs(ftldb) do
-        if db.firstToLevel[classFilter] == nil then
-            db.firstToLevel[classFilter] = {}
-        end
-        for level, record in pairs(levels) do
-            -- only merge records that fit the wire format; remote data is untrusted
-            if type(level) == "number" and level >= 2 and level <= 99
-                    and record.name ~= nil and record.dingedAt ~= nil then
-                local merged = mergeFTLRecord(db.firstToLevel[classFilter], level,
-                        record.name, record.classIndex, record.dingedAt)
-                if merged and (db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt) then
-                    db.raceStartedAt = record.dingedAt
+        if classFilter == 0 or self.Config:IsValidClassIndex(classFilter) then
+            if db.firstToLevel[classFilter] == nil then
+                db.firstToLevel[classFilter] = {}
+            end
+            for level, record in pairs(levels) do
+                -- only merge records that fit the wire format; remote data is untrusted
+                if type(level) == "number" and level >= 2 and level <= self.Config.MaxLevel
+                        and record.name ~= nil and record.dingedAt ~= nil then
+                    local merged = mergeFTLRecord(db.firstToLevel[classFilter], level,
+                            record.name, record.classIndex, record.dingedAt)
+                    if merged and (db.raceStartedAt == nil or record.dingedAt < db.raceStartedAt) then
+                        db.raceStartedAt = record.dingedAt
+                    end
                 end
             end
         end

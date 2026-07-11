@@ -5,10 +5,18 @@ local TheClassicRace = _G.TheClassicRace
 local C_Timer, IsInGuild, math = _G.C_Timer, _G.IsInGuild, _G.math
 local GetNumGroupMembers = _G.GetNumGroupMembers
 
+local function leaderboardClassIndexes(config)
+    local indexes = {0}
+    for _, classIndex in ipairs(config.MopClassIndexes) do
+        indexes[#indexes + 1] = classIndex
+    end
+    return indexes
+end
+
 -- djb2 chain over all leaderboards — mirrors Tracker:ComputeFullHash without a cross-component dependency
 local function computeFullHash(db, config)
     local hash = 5381
-    for classIndex = 0, #config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(config)) do
         local lb = db.factionrealm.leaderboard[classIndex]
         if lb then
             hash = ((hash * 33) + TheClassicRace.Leaderboard.ComputeHash(lb)) % 2147483647
@@ -19,16 +27,16 @@ end
 
 -- djb2 hash over all firstToLevel records in deterministic order.
 -- Covers every classFilter the serializer transmits (0 = overall, 1..#Classes)
--- and the full 2-digit level range of the wire format; fields are ':'-separated
+-- and the configured level range; fields are ':'-separated
 -- so different records can't concatenate to the same entry string.
 local function computeFTLHash(db, config)
     local hash = 5381
     local ftl = db.factionrealm.firstToLevel
     if not ftl then return hash end
-    for classFilter = 0, #config.Classes do
+    for _, classFilter in ipairs(leaderboardClassIndexes(config)) do
         local levels = ftl[classFilter]
         if levels then
-            for level = 2, 99 do
+            for level = 2, config.MaxLevel do
                 local record = levels[level]
                 if record then
                     local entry = classFilter .. ":" .. level .. ":" .. record.name .. ":"
@@ -48,7 +56,7 @@ end
 -- history hash and the history sync payload are scoped to this bounded subset.
 local function relevantHistoryNames(db, config)
     local onLeaderboard = {}
-    for classIndex = 0, #config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(config)) do
         local lb = db.factionrealm.leaderboard[classIndex]
         if lb then
             for _, player in ipairs(lb.players) do
@@ -74,7 +82,7 @@ local function computePHHash(db, config)
     for _, name in ipairs(relevantHistoryNames(db, config)) do
         local hist = playerHistory[name]
         local entry = name .. ":" .. (hist.classIndex or 0)
-        for level = 2, 99 do
+        for level = 2, config.MaxLevel do
             local dingedAt = hist.levels ~= nil and hist.levels[level] or nil
             if dingedAt ~= nil then
                 entry = entry .. ":" .. level .. ":" .. math.floor(dingedAt)
@@ -358,7 +366,7 @@ function TheClassicRaceSync:OnNetStartSync(payload, sender)
         if type(payload[2]) == "table" then
             -- guild sync: payload[2] is per-class hashes — send every leaderboard that differs
             local perClassHashes = payload[2]
-            for classIndex = 0, #self.Config.Classes do
+            for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
                 local lb = self.DB.factionrealm.leaderboard[classIndex]
                 if lb and #lb.players > 0 then
                     local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
@@ -553,7 +561,7 @@ function TheClassicRaceSync:SendBuddyPings()
 
     local myFullHash = computeFullHash(self.DB, self.Config)
     local myPerClassHashes = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
@@ -574,7 +582,7 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
 
     local myFullHash = computeFullHash(self.DB, self.Config)
     local myPerClassHashes = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
@@ -597,7 +605,7 @@ function TheClassicRaceSync:OnNetBuddyPing(payload, sender)
     local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
-        for classIndex = 0, #self.Config.Classes do
+        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
             local lb = self.DB.factionrealm.leaderboard[classIndex]
             if lb and #lb.players > 0 then
                 local myHash = myPerClassHashes[classIndex + 1]
@@ -640,7 +648,7 @@ function TheClassicRaceSync:OnNetBuddyPong(payload, sender)
     local diffClasses = {}
     if leaderboardsDiffer then
         local senderPerClassHashes = payload[2]
-        for classIndex = 0, #self.Config.Classes do
+        for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
             local lb = self.DB.factionrealm.leaderboard[classIndex]
             if lb and #lb.players > 0 then
                 local myHash = TheClassicRace.Leaderboard.ComputeHash(lb)
@@ -750,7 +758,7 @@ function TheClassicRaceSync:SendGroupSync()
 
     local myFullHash = computeFullHash(self.DB, self.Config)
     local myPerClassHashes = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end
@@ -801,7 +809,7 @@ function TheClassicRaceSync:DoGuildSync()
 
     -- send per-class hashes so the partner knows exactly which leaderboards to send back
     local myPerClassHashes = {}
-    for classIndex = 0, #self.Config.Classes do
+    for _, classIndex in ipairs(leaderboardClassIndexes(self.Config)) do
         local lb = self.DB.factionrealm.leaderboard[classIndex]
         myPerClassHashes[classIndex + 1] = lb and TheClassicRace.Leaderboard.ComputeHash(lb) or 0
     end

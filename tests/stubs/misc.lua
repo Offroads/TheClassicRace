@@ -47,3 +47,19 @@ function _G.C_Timer.Advance(seconds)
         return after[1] > _G.C_Timer.now
     end)
 end
+local whoResults = {}
+local whoQuery = nil
+
+_G.C_FriendList = {
+    GetNumWhoResults = function() return #whoResults, #whoResults end,
+    GetWhoInfo = function(index) return whoResults[index] end,
+    SetWhoToUi = function() end,
+    SendWho = function(query) whoQuery = query end,
+}
+_G.SetWhoResults = function(results) whoResults = results or {} end
+_G.GetWhoQuery = function() return whoQuery end
+_G.ResetWhoQuery = function() whoQuery = nil end
+_G.FriendsFrame = {
+    RegisterEvent = function() end,
+    UnregisterEvent = function() end,
+}
